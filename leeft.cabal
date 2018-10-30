@@ -57,7 +57,7 @@ test-suite leeft-tests
   type:                exitcode-stdio-1.0
   main-is:             Main.hs
   build-depends:       base >=4.11 && <4.12
-                     , lambda-subst
+                     , leeft
                      , mtl
                      , hspec
   hs-source-dirs:      test
