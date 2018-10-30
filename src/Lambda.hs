@@ -76,7 +76,8 @@ merge (App f x) =
 -- | Abstracts over any free variables in a term and re-applies them
 abstracted :: Eq a => Expr' a -> Expr' a
 abstracted (Var' a) = Var' a
-abstracted e =
+abstracted (Call' f args) = Call' (abstracted f) (abstracted <$> args)
+abstracted e@Lam'{} =
   let
     vars = toList e
   in
