@@ -3,20 +3,21 @@
 {-# language RankNTypes #-}
 {-# language DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
 {-# language StandaloneDeriving, TemplateHaskell #-}
+{-# language ScopedTypeVariables #-}
 module Lambda where
 
 import Bound
 import Bound.Scope
-import Control.Monad.State (MonadState, get, put)
+import Control.Monad.State (MonadState, get, put, evalStateT)
 import Control.Monad.Trans.Class (lift)
-import Control.Monad.Writer (MonadWriter, tell)
+import Control.Monad.Writer (MonadWriter, tell, runWriter)
 import Data.Bifunctor (first)
 import Data.Deriving (deriveEq1, deriveShow1)
 import Data.Foldable (toList)
-import Data.List (elemIndex)
+import Data.List (elemIndex, intersect)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Maybe (fromMaybe)
-import Data.Void (Void)
+import Data.Void (Void, absurd)
 
 data Expr a
   = Var a
@@ -73,25 +74,69 @@ merge (App f x) =
     Call' f' args -> Call' f' $ args <> pure (merge x)
     f' -> Call' f' $ pure (merge x)
 
--- | Abstracts over any free variables in a term and re-applies them
-abstracted :: Eq a => Expr' a -> Expr' a
-abstracted (Var' a) = Var' a
-abstracted (Call' f args) = Call' (abstracted f) (abstracted <$> args)
-abstracted e@Lam'{} =
-  let
-    vars = toList e
-  in
-    case vars of
-      [] -> e
-      v:vs -> Call' (Lam' $ abstract (`elemIndex` vars) e) (fmap pure $ v :| vs)
+-- | Abstracts over additional things in an 'Int'-indexed scope; 
+abstractMore :: (Monad f, Foldable f, Eq a) => [a] -> Scope Int f a -> Scope Int f a
+abstractMore vars s =
+  toScope .
+  (>>= \case
+      B n -> pure $ B n
+      F x -> maybe (pure $ F x) (pure . B) (x `elemIndex` vars)) .
+  fromScope .
+  mapBound (+numVars) $
+  s
+  where
+    numVars = length $ intersect (toList s) vars
 
-collect
-  :: (MonadState [a] m, MonadWriter [(a, Scope Int Expr' a)] m)
+abstracted'
+  :: ( MonadState [a] m, MonadWriter [(a, Expr' a)] m
+     , Eq a
+     )
   => Expr' a -> m (Expr' a)
-collect (Var' a) = pure $ Var' a
-collect (Call' f args) = Call' <$> collect f <*> traverse collect args
-collect (Lam' s) = do
+abstracted' (Var' a) = pure $ Var' a
+abstracted' (Call' f args) = Call' <$> abstracted' f <*> traverse abstracted' args
+abstracted' (Lam' s) = _
+  where
+    go
+      :: ( MonadState [a] m, MonadWriter [(a, Expr' a)] m
+         , Eq a
+         )
+      => Scope Int Expr' a -> m (Expr' a)
+    go s =
+      case fromScope s of
+        Var' (B n) -> pure $ Lam' (Scope (Var' (B n)))
+        Var' (F x) -> pure $ Call' (Lam' (Scope (Var' (B 0)))) (Var' x :| [])
+        Lam' x -> _
+        Call' x y -> _
+
+abstracted
+  :: ( MonadState [a] m, MonadWriter [(a, Expr' a)] m
+     , Eq a
+     )
+  => Expr' a -> m (Expr' a)
+abstracted (Var' a) = pure $ Var' a
+abstracted (Call' f args) = Call' <$> abstracted f <*> traverse abstracted args
+abstracted (Lam' s) = do
   a:as <- get; put as
-  tell [(a, s)]
-  collect $ _ s
-  pure $ Var' a
+  let
+    vars = toList s
+    numVars = length vars
+  case vars of
+    [] -> do
+      tell [(a, Lam' s)]
+      pure $ Var' a
+    v:vs -> do
+      tell [(a, Lam' $ abstractMore vars s)]
+      pure $ Call' (Var' a) (fmap pure $ v :| vs)
+
+liftLambdas :: Expr String -> (Expr' String, [(String, Expr' String)])
+liftLambdas tm = runWriter (evalStateT (abstracted $ merge tm) $ ("name"++) . show <$> [1..])
+
+test :: (Expr' String, [(String, Expr' String)])
+test = liftLambdas tm
+  where
+    tm = lam "x" $ App (Var "x") (Var "y")
+
+test2 :: (Expr' String, [(String, Expr' String)])
+test2 = liftLambdas tm
+  where
+    tm = lam "x" $ App (Var "x") (lam "y" $ App (Var "x") (Var "z"))
