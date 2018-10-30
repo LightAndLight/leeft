@@ -13,16 +13,52 @@ maintainer:          isaace71295@gmail.com
 category:            Language
 build-type:          Simple
 extra-source-files:  ChangeLog.md
-cabal-version:       >=1.10
+cabal-version:       >=2
 
 library
-  exposed-modules:     Lambda
-                     , Lift
+  exposed-modules:     Lambda.Lift
+  reexported-modules:  Lambda.Subst
+                     , Lambda.Expr
   build-depends:       base >=4.11 && <4.12
                      , mtl
-                     , bound
-                     , deriving-compat
-                     , mmorph
+                     , lens
                      , transformers >= 0.5
+                     , lambda-expr
+                     , lambda-subst
   hs-source-dirs:      src
+  default-language:    Haskell2010
+
+library lambda-subst
+  reexported-modules:  Lambda.Subst
+  build-depends:       base >=4.11 && <4.12
+                     , subst
+                     , subst-impl
+  mixins:              subst (Language.Subst as Lambda.Subst)
+                         requires (Language.Subst.Indef as Lambda.Subst.Impl )
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+
+library lambda-expr
+  exposed-modules:     Lambda.Expr
+  build-depends:       base >=4.11 && <4.12
+                     , lens
+  hs-source-dirs:      lambda-expr
+  default-language:    Haskell2010
+
+library subst-impl
+  exposed-modules:     Lambda.Subst.Impl
+  build-depends:       base >=4.11 && <4.12
+                     , lens
+                     , lambda-expr
+  hs-source-dirs:      subst-impl
+  default-language:    Haskell2010
+
+test-suite leeft-tests
+  type:                exitcode-stdio-1.0
+  main-is:             Main.hs
+  build-depends:       base >=4.11 && <4.12
+                     , lambda-subst
+                     , mtl
+                     , hspec
+  hs-source-dirs:      test
   default-language:    Haskell2010
