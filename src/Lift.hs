@@ -1,9 +1,14 @@
+{-# language DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
 {-# language GeneralizedNewtypeDeriving #-}
+{-# language LambdaCase #-}
+{-# language StandaloneDeriving, TemplateHaskell #-}
 module Lift where
 
-import Bound (Scope)
-import Bound.Scope (abstractEither, splat)
-import Control.Monad.Writer (Writer)
+import Bound (Scope, makeBound)
+import Bound.Scope
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Writer (MonadWriter, Writer, tell)
+import Data.Deriving (deriveShow1)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Void (Void, absurd)
 
@@ -11,22 +16,23 @@ import qualified Lambda
 
 data Expr a
   = Var !a
-  | Call String (Expr a)
+  | App (Expr a) (Expr a)
+  deriving (Functor, Foldable, Traversable)
+deriveShow1 ''Expr
+makeBound ''Expr
+deriving instance Show a => Show (Expr a)
 
-data Params a
-  = Params (Scope Int Expr a)
-  | Expr (Expr a)
+newtype Arg = Arg Int deriving (Num, Eq, Show)
+newtype Name = Name Int deriving (Num, Eq, Show)
 
-data Binding a = Binding a (Params a)
+data Binding a = Binding { unBinding :: Scope (Either Arg Name) Expr a }
+  deriving (Functor, Foldable, Traversable)
+deriveShow1 ''Binding
+deriving instance Show a => Show (Binding a)
 
-newtype LL a = LL { unLL :: Writer [Binding String] a }
-  deriving (Functor, Applicative, Monad)
-
-liftBinding :: Lambda.Binding s -> LL (Binding s)
-liftBinding (Lambda.Binding n e) = _
-
-liftParams :: Lambda.Expr s -> LL (Params s)
-liftParams = _
-
-liftExpr :: Lambda.Expr s -> LL (Expr s)
-liftExpr = _
+liftExpr :: Lambda.Expr s -> [Binding s]
+liftExpr e =
+  case e of
+    Lambda.Var a -> [Binding $ lift (Var a)]
+    Lambda.Lam{} -> _
+    Lambda.App f x -> _
