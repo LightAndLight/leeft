@@ -10,7 +10,7 @@ import Bound
 import Bound.Scope
 import Control.Monad.State (MonadState, get, put, evalStateT)
 import Control.Monad.Trans.Class (lift)
-import Control.Monad.Writer (MonadWriter, tell, runWriter)
+import Control.Monad.Writer (MonadWriter, tell, runWriter, runWriterT)
 import Data.Bifunctor (first)
 import Data.Deriving (deriveEq1, deriveShow1)
 import Data.Foldable (toList)
@@ -29,6 +29,40 @@ deriveEq1 ''Expr
 makeBound ''Expr
 deriving instance Show a => Show (Expr a)
 deriving instance Eq a => Eq (Expr a)
+
+liftLambdas
+  :: MonadState [a] m
+  => Expr a -> m (Expr a, [(a, Expr a)])
+liftLambdas = runWriterT . go
+  where
+    go
+      :: (MonadState [a] m, MonadWriter [(a, Expr a)] m)
+      => Expr a -> m (Expr a)
+    go (Var a) = pure $ Var a
+    go (App a b) = App <$> go a <*> go b
+    go (Lam s) = do
+      n:ns <- get; put n
+      thing (unscope s)
+
+    thing
+      :: (MonadState [a] m, MonadWriter [(a, Expr a)] m)
+      => Expr (Var () (Expr a)) -> m (Expr a)
+    thing e =
+      case e of
+        Var (B b) -> pure . Lam . Scope $ Var (B b)
+        Var (F a) -> pure $ App (Lam (Scope $ Var (B ()))) a
+        App x y -> App <$> thing x <*> thing y
+        Lam x -> thing =<< thing2 (unscope x)
+
+    thing2
+      :: (MonadState [a] m, MonadWriter [(a, Expr a)] m)
+      => Expr (Var () (Expr (Var () (Expr a)))) -> m (Expr (Var () (Expr a)))
+    thing2 e =
+      case e of
+        Var (B b) -> pure . Lam . Scope $ Var (B b)
+        Var (F a) -> pure $ App (Lam (Scope $ Var (B ()))) a
+        App x y -> App <$> thing2 x <*> thing2 y
+        Lam x -> _
 
 lam :: Eq a => a -> Expr a -> Expr a
 lam x e = Lam $ abstract1 x e
@@ -87,6 +121,7 @@ abstractMore vars s =
   where
     numVars = length $ intersect (toList s) vars
 
+{-
 abstracted'
   :: ( MonadState [a] m, MonadWriter [(a, Expr' a)] m
      , Eq a
@@ -128,15 +163,17 @@ abstracted (Lam' s) = do
       tell [(a, Lam' $ abstractMore vars s)]
       pure $ Call' (Var' a) (fmap pure $ v :| vs)
 
-liftLambdas :: Expr String -> (Expr' String, [(String, Expr' String)])
-liftLambdas tm = runWriter (evalStateT (abstracted $ merge tm) $ ("name"++) . show <$> [1..])
+liftLambdas' :: Expr String -> (Expr' String, [(String, Expr' String)])
+liftLambdas' tm = runWriter (evalStateT (abstracted $ merge tm) $ ("name"++) . show <$> [1..])
 
 test :: (Expr' String, [(String, Expr' String)])
-test = liftLambdas tm
+test = liftLambdas' tm
   where
     tm = lam "x" $ App (Var "x") (Var "y")
 
 test2 :: (Expr' String, [(String, Expr' String)])
-test2 = liftLambdas tm
+test2 = liftLambdas' tm
   where
     tm = lam "x" $ App (Var "x") (lam "y" $ App (Var "x") (Var "z"))
+
+-}
