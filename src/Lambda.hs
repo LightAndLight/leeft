@@ -8,6 +8,7 @@ import Bound (Scope)
 import Bound.Scope (fromScope, toScope, abstract)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
+import Control.Lens.TH (makePrisms)
 import Control.Monad.State (MonadState, runState, get, gets, put)
 import Control.Monad.Writer (MonadWriter, tell)
 import Data.Deriving (deriveEq1, deriveShow1)
@@ -41,6 +42,13 @@ lam as e =
     _ -> Lam l $ abstract (`elemIndex` as) e
   where
     l = length as
+
+apply1 :: Monad f => f a -> Scope Int f a -> Scope Int f a
+apply1 a =
+  toScope .
+  (>>= unvar (\n -> if n == 0 then F <$> a else pure $ B (n-1)) (pure . F)) .
+  fromScope
+
 
 -- | Close over a scope, returning the new scope, the number of variables abstracted,
 -- and a list of the abstracted variables
