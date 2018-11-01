@@ -19,6 +19,8 @@ library
   exposed-modules:     Lambda
                      , OrderedSet
                      , Scratchpad
+                     , Type
+                     , Typecheck
   build-depends:       base >=4.11 && <4.12
                      , lens
                      , mtl
@@ -33,8 +35,9 @@ test-suite leeft-tests
   main-is:             Main.hs
   build-depends:       base >=4.11 && <4.12
                      , leeft
-                     , mtl
                      , bound
                      , hedgehog
+                     , mtl
+                     , transformers >=0.5
   hs-source-dirs:      test
   default-language:    Haskell2010
