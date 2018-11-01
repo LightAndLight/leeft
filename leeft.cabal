@@ -20,6 +20,7 @@ library
                      , OrderedSet
                      , Scratchpad
   build-depends:       base >=4.11 && <4.12
+                     , lens
                      , mtl
                      , bound
                      , deriving-compat

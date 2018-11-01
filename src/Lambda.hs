@@ -49,7 +49,6 @@ apply1 a =
   (>>= unvar (\n -> if n == 0 then F <$> a else pure $ B (n-1)) (pure . F)) .
   fromScope
 
-
 -- | Close over a scope, returning the new scope, the number of variables abstracted,
 -- and a list of the abstracted variables
 closeScope
