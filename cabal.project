@@ -1,7 +1,0 @@
-packages:
-  ./.
-
-source-repository-package
-    type: git
-    location: git@github.com:lightandlight/subst.git
-    subdir: subst

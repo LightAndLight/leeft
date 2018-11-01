@@ -16,41 +16,16 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=2
 
 library
-  exposed-modules:     Lambda.Lift
-  reexported-modules:  Lambda.Subst
-                     , Lambda.Expr
+  exposed-modules:     Lambda
+                     , OrderedSet
+                     , Scratchpad
   build-depends:       base >=4.11 && <4.12
+                     , lens
                      , mtl
-                     , lens
-                     , transformers >= 0.5
-                     , lambda-expr
-                     , lambda-subst
+                     , bound
+                     , deriving-compat
+                     , transformers >=0.5
   hs-source-dirs:      src
-  default-language:    Haskell2010
-
-library lambda-subst
-  reexported-modules:  Lambda.Subst
-  build-depends:       base >=4.11 && <4.12
-                     , subst
-                     , subst-impl
-  mixins:              subst (Language.Subst as Lambda.Subst)
-                         requires (Language.Subst.Indef as Lambda.Subst.Impl )
-  hs-source-dirs:      src
-  default-language:    Haskell2010
-
-library lambda-expr
-  exposed-modules:     Lambda.Expr
-  build-depends:       base >=4.11 && <4.12
-                     , lens
-  hs-source-dirs:      lambda-expr
-  default-language:    Haskell2010
-
-library subst-impl
-  exposed-modules:     Lambda.Subst.Impl
-  build-depends:       base >=4.11 && <4.12
-                     , lens
-                     , lambda-expr
-  hs-source-dirs:      subst-impl
   default-language:    Haskell2010
 
 test-suite leeft-tests
@@ -59,6 +34,7 @@ test-suite leeft-tests
   build-depends:       base >=4.11 && <4.12
                      , leeft
                      , mtl
-                     , hspec
+                     , bound
+                     , hedgehog
   hs-source-dirs:      test
   default-language:    Haskell2010

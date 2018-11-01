@@ -10,9 +10,7 @@ let
 
   variant = if doBenchmark then pkgs.haskell.lib.doBenchmark else pkgs.lib.id;
 
-  subst = haskellPackages.callPackage (import ./nix/subst.nix) {};
-
-  drv = variant (haskellPackages.callPackage (import ./leeft.nix) { inherit subst; });
+  drv = variant (haskellPackages.callPackage (import ./leeft.nix) {});
 
 in
 
