@@ -1,26 +1,25 @@
 {-# language FlexibleContexts #-}
-{-# language DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
-{-# language StandaloneDeriving, TemplateHaskell #-}
+{-# language ScopedTypeVariables #-}
+{-# language StandaloneDeriving, DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# language TemplateHaskell #-}
 module Lambda where
 
-import Bound
-import Bound.Scope
-import Bound.Var
-import Control.Monad (replicateM)
-import Control.Monad.State (MonadState, get, put, evalStateT)
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.Writer (MonadWriter, tell, runWriter, runWriterT)
-import Data.Bifunctor (bimap)
+import Bound (Scope)
+import Bound.Scope (fromScope, toScope, abstract)
+import Bound.TH (makeBound)
+import Bound.Var (Var(..), unvar)
+import Control.Monad.State (MonadState, runState, get, gets, put)
+import Control.Monad.Writer (MonadWriter, tell)
 import Data.Deriving (deriveEq1, deriveShow1)
-import Data.Foldable (toList)
-import Data.List (elemIndex, nub)
+import Data.List (elemIndex)
 import Data.List.NonEmpty (NonEmpty(..))
-import Data.Maybe (fromJust)
 import Data.Void (Void)
+
+import qualified OrderedSet as Ordered
 
 data Expr a
   = Var a
-  | App (Expr a) (Expr a)
+  | Call (Expr a) (NonEmpty (Expr a))
   | Lam Int (Scope Int Expr a)
   deriving (Functor, Foldable, Traversable)
 deriveShow1 ''Expr
@@ -33,115 +32,61 @@ lam :: Eq a => [a] -> Expr a -> Expr a
 lam as e =
   case e of
     Lam bs s ->
-      let
-        l = length as
-      in
-        Lam (l + bs) $ toScope $ fmap (unvar (B . (l+)) (\a -> maybe (F a) B $ elemIndex a as)) $ fromScope s
-    _ -> Lam (length as) $ abstract (`elemIndex` as) e
-
--- | If a term is closed then it can be cast to other types
-cast :: Expr a -> Maybe (Expr b)
-cast = traverse (const Nothing)
-
-replace :: a -> Expr a -> (Bool, Expr a)
-replace val e =
-  case e of
-    Var a -> (False, Var a)
-    App f x -> do
-      case replace val f of
-        (True, f') -> (True, App f' x)
-        (False, _) -> App f <$> replace val x
-    Lam as s ->
-      case replace' val s of
-        (True, s') -> (True, Lam as s')
-        (False, _) -> (True, Var val)
+      Lam (l + bs) $
+      toScope $
+      unvar
+        (B . (l+))
+        (\a -> maybe (F a) B $ elemIndex a as) <$>
+      fromScope s
+    _ -> Lam l $ abstract (`elemIndex` as) e
   where
-    replace' :: b -> Scope Int Expr b -> (Bool, Scope Int Expr b)
-    replace' b = fmap toScope . replace (F b) . fromScope
+    l = length as
 
-replace2 :: Eq a => a -> Expr a -> (Maybe (Expr a), Expr a)
-replace2 val e =
-  case e of
-    Var a -> (Nothing, Var a)
-    App f x -> do
-      case replace2 val f of
-        (Just e, f') -> (Just e, App f' x)
-        (Nothing, _) -> App f <$> replace2 val x
-    Lam as s ->
-      case replace2' val s of
-        (Just e, s') -> (Just e, Lam as s')
-        (Nothing, _) ->
-          let
-            frees = nub $ toList e
-          in
-            (cast $ lam frees e, Var val)
+-- | Close over a scope, returning the new scope, the number of variables abstracted,
+-- and a list of the abstracted variables
+closeScope
+  :: forall f b
+   . (Monad f, Traversable f, Eq b)
+  => Scope Int f b
+  -> (Scope Int f Void, Int, [b])
+closeScope s = (res, l, Ordered.toList st)
   where
-    replace2' :: Eq b => b -> Scope Int Expr b -> (Maybe (Expr b), Scope Int Expr b)
-    replace2' b = bimap (>>= cast) toScope . replace2 (F b) . fromScope
+    l = Ordered.size st
 
-cdr :: (a, b, c) -> (b, c)
-cdr (_, b, c) = (b, c)
+    updateVar =
+      unvar
+        (pure . B . (+l))
+        (\a -> do
+          (n, st) <- gets $ Ordered.posInsertMay a
+          case st of
+            Nothing -> pure $ B n
+            Just st' -> B n <$ put st')
 
-replace3 :: Eq a => [a] -> Expr a -> ([a], [(a, Expr a)], Expr a)
-replace3 supply e =
-  case e of
-    Var a -> (supply, [], Var a)
-    App f x ->
-      let
-        (supply', es, f') = replace3 supply f
-        (supply'', es', x') = replace3 supply' x
-      in
-        (supply'', es ++ es', App f' x')
-    Lam as s ->
-      case replace3' supply s of
-        (supply', es, s') ->
-          case supply' of
-            n:supply'' ->
-              let
-                frees = nub $ toList s'
-              in
-                (supply'', (n, lam frees e):es, foldr (\x f -> App f (Var x)) (Var n) frees)
-  where
-    replace3' :: Eq b => [b] -> Scope Int Expr b -> ([b], [(b, Expr b)], Scope Int Expr b)
-    replace3' supply =
-      (\(x, y, z) -> (unvar undefined id <$> x, bimap (unvar undefined id) (fromJust . cast) <$> y, toScope z)) .
-      replace3 (F <$> supply) .
-      fromScope
-
-{-
-liftLambdasScope
-  :: (Eq b, MonadState [b] m, MonadWriter [(b, Int, Scope Int Expr b)] m)
-  => (Int -> b) -> (a -> b) -> Scope Int Expr a -> m (Expr b)
-liftLambdasScope g f s = liftLambdas (unvar g f) $ fromScope s
-
-{-
-
-> lam ["x"] (App (lam ["x"] $ Var "y") (Var "x"))
-Lam 1 (Scope (App (Lam 1 (Scope (Var (F (Var (F (Var "y"))))))) (Var (B 0)))) :: Expr String
-Scope (App (Lam 1 (Scope (Var (F (Var (F (Var "y"))))))) (Var (B 0))) :: Scope Int Expr String
-App (Lam 1 (Scope (Var (F (Var (F "y")))))) (Var (B 0)) :: Expr (Var Int String)
-Lam 1 (Scope (Var (F (Var (F "y")))))  :: Expr (Var Int String)
-Scope (Var (F (Var (F "y"))))  :: Scope Int Expr (Var Int String)
-Var (F (F "y"))  :: Expr (Var Int (Var Int String))
-
--}
-
-liftLambdas''
-  :: (Eq b, MonadState [b] m, MonadWriter [(b, Int, Scope Int Expr b)] m)
-  => (a -> b) -> Expr (Var Int a) -> m (Expr (Var Int b))
-liftLambdas'' f e =
-  case e of
-    Var (F x) -> _
-    Var (B x) -> _
-    App a b -> _
-    Lam as s -> _
+    (res, st) =
+      runState
+        (fmap toScope $ traverse updateVar $ fromScope s)
+        Ordered.empty
 
 liftLambdas
-  :: (Eq b, MonadState [b] m, MonadWriter [(b, Int, Scope Int Expr b)] m)
-  => (a -> b) -> Expr a -> m (Expr b)
-liftLambdas f e =
+  :: forall a m
+   . (MonadState [a] m, MonadWriter [(a, Expr Void)] m)
+  => forall b. Eq b => (a -> b) -> Expr b -> m (Expr b)
+liftLambdas ctx e =
   case e of
-    Var a -> _
-    App a b -> App <$> liftLambdas f a <*> liftLambdas f b
-    Lam as s -> _
--}
+    Var a -> pure $ Var a
+    Call f xs -> do
+      f' <- liftLambdas ctx f
+      xs' <- traverse (liftLambdas ctx) xs
+      pure $ Call f' xs'
+    Lam as s -> do
+      s' <- liftLambdasScope ctx s
+      n <- do; x:xs <- get; x <$ put xs
+      case closeScope s' of
+        (s'', lxs, xs) -> do
+          tell [(n, Lam (as + lxs) s'')]
+          pure $ case Var <$> xs of
+            [] -> Var $ ctx n
+            v:vs -> Call (Var $ ctx n) $ v :| vs
+  where
+    liftLambdasScope :: forall b. Eq b => (a -> b) -> Scope Int Expr b -> m (Scope Int Expr b)
+    liftLambdasScope ctx = fmap toScope . liftLambdas (F . ctx) . fromScope
