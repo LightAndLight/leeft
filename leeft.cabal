@@ -21,7 +21,10 @@ library
                      , Scratchpad
                      , Type
                      , Typecheck
+                     , Unification
+                     , Bound.Util
   build-depends:       base >=4.11 && <4.12
+                     , equivalence
                      , lens
                      , mtl
                      , bound
