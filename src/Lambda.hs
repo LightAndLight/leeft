@@ -1,4 +1,5 @@
 {-# language FlexibleContexts #-}
+{-# language OverloadedStrings #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving, DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
 {-# language TemplateHaskell #-}
@@ -14,6 +15,7 @@ import Control.Monad.Writer (MonadWriter, tell)
 import Data.Deriving (deriveEq1, deriveShow1)
 import Data.List (elemIndex)
 import Data.List.NonEmpty (NonEmpty(..))
+import Data.String (IsString(..))
 import Data.Void (Void)
 
 import qualified OrderedSet as Ordered
@@ -73,6 +75,9 @@ closeScope s = (res, l, Ordered.toList st)
       runState
         (fmap toScope $ traverse updateVar $ fromScope s)
         Ordered.empty
+
+nameSupply :: (IsString s, Semigroup s) => [s]
+nameSupply = ("t" <>) . fromString . show <$> [1..]
 
 liftLambdas
   :: forall a m
