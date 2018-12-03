@@ -19,8 +19,6 @@ library
   exposed-modules:     Lambda
                      , OrderedSet
                      , Scratchpad
-                     , Type
-                     , Typecheck
   build-depends:       base >=4.11 && <4.12
                      , lens
                      , mtl
