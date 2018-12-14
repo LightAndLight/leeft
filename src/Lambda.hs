@@ -152,3 +152,16 @@ example = do
     ppr id id input <*>
     ppr id id expr <*>
     traverse (pprLifted id) defs
+
+y :: MonadState [String] m => m String
+y = do
+  let input =
+        lam ["f"] $
+        Call
+          (lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]])
+          [lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]]]
+  (expr, defs) <- runWriterT $ liftLambdas id input
+  (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
+    ppr id id input <*>
+    ppr id id expr <*>
+    traverse (pprLifted id) defs

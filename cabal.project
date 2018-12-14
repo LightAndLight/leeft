@@ -1,0 +1,3 @@
+packages:
+  ./.
+  ./grin/grin

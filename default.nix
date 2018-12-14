@@ -1,17 +1,39 @@
-{ nixpkgs ? import <nixpkgs> {}, compiler ? "default", doBenchmark ? false }:
+{ nixpkgs ? import <nixpkgs> {}, hoogle ? false }:
 
 let
 
   inherit (nixpkgs) pkgs;
 
-  haskellPackages = if compiler == "default"
-                       then pkgs.haskellPackages
-                       else pkgs.haskell.packages.${compiler};
+  f = import ./leeft.nix;
 
-  variant = if doBenchmark then pkgs.haskell.lib.doBenchmark else pkgs.lib.id;
+  # we need to use ghc822 for llvm-hs 5
+  hp = pkgs.haskell.packages.ghc822;
 
-  drv = variant (haskellPackages.callPackage (import ./leeft.nix) {});
+  hp' =
+    if hoogle
+    then
+      hp.override {
+        overrides = self: super: {
+          temporary = self.callPackage (import ./nix/temporary.nix) {};
+          ListLike = self.callPackage (import ./nix/ListLike.nix) {};
+          functor-infix = self.callPackage (import ./nix/functor-infix.nix) {};
+          llvm-hs = self.callPackage (import ./nix/llvm-hs.nix) { llvm-config = pkgs.llvm; };
+          llvm-hs-pure = self.callPackage (import ./nix/llvm-hs-pure.nix) {};
+          llvm-hs-pretty =
+            # failing tests
+            # this might be a mistake
+            pkgs.haskell.lib.dontCheck
+            (self.callPackage (import ./nix/llvm-hs-pretty.nix) {});
+          ghc = super.ghc // { withPackages = super.ghc.withHoogle; };
+          ghcWithPackages = self.ghc.withPackages;
+        };
+      }
+    else hp;
+
+  grin = hp'.callPackage (import ./grin/grin) {};
+
+  drv = hp'.callPackage f { inherit grin; };
 
 in
 
-  if pkgs.lib.inNixShell then drv.env else drv
+  drv
