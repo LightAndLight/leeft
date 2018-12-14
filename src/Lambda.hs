@@ -25,7 +25,7 @@ import qualified OrderedSet as Ordered
 data Expr a
   = Var a
   | Call (Expr a) (NonEmpty (Expr a))
-  | Lam Int (Scope Int Expr a)
+  | Lam !Int (Scope Int Expr a)
   | Int !Int64
   | Add (Expr a) (Expr a)
   deriving (Functor, Foldable, Traversable)
@@ -137,38 +137,41 @@ data Lifted a = Lifted a (Expr Void)
 nameSupply :: (IsString s, Semigroup s) => [s]
 nameSupply = ("v" <>) . fromString . show <$> [1::Int ..]
 
-liftLambdas
-  :: forall a m
-   . (MonadState [a] m, MonadWriter [Lifted a] m)
-  => forall b. Eq b => (a -> b) -> Expr b -> m (Expr b)
-liftLambdas ctx e =
-  case e of
-    Int n -> pure $ Int n
-    Add a b -> Add <$> liftLambdas ctx a <*> liftLambdas ctx b
-    Var a -> pure $ Var a
-    Call f xs -> do
-      f' <- liftLambdas ctx f
-      xs' <- traverse (liftLambdas ctx) xs
-      pure $ Call f' xs'
-    Lam as s -> do
-      s' <- liftLambdasScope ctx s
-      n <- do; xs <- get; head xs <$ put (tail xs)
-      case closeScope s' of
-        (s'', lxs, xs) -> do
-          tell [Lifted n $ Lam (as + lxs) s'']
-          pure $ case Var <$> xs of
-            [] -> Var $ ctx n
-            v:vs -> Call (Var $ ctx n) $ v :| vs
+liftLambdas :: (MonadState [a] m, Eq a) => Expr a -> m (Expr a, [Lifted a])
+liftLambdas = runWriterT . liftLambdas' id
   where
-    liftLambdasScope :: forall b. Eq b => (a -> b) -> Scope Int Expr b -> m (Scope Int Expr b)
-    liftLambdasScope ctx' = fmap toScope . liftLambdas (F . ctx') . fromScope
+    liftLambdas'
+      :: forall a m
+      . (MonadState [a] m, MonadWriter [Lifted a] m)
+      => forall b. Eq b => (a -> b) -> Expr b -> m (Expr b)
+    liftLambdas' ctx e =
+      case e of
+        Int n -> pure $ Int n
+        Add a b -> Add <$> liftLambdas' ctx a <*> liftLambdas' ctx b
+        Var a -> pure $ Var a
+        Call f xs -> do
+          f' <- liftLambdas' ctx f
+          xs' <- traverse (liftLambdas' ctx) xs
+          pure $ Call f' xs'
+        Lam as s -> do
+          s' <- liftLambdas'Scope ctx s
+          n <- do; xs <- get; head xs <$ put (tail xs)
+          case closeScope s' of
+            (s'', lxs, xs) -> do
+              tell [Lifted n $ Lam (as + lxs) s'']
+              pure $ case Var <$> xs of
+                [] -> Var $ ctx n
+                v:vs -> Call (Var $ ctx n) $ v :| vs
+      where
+        liftLambdas'Scope :: forall b. Eq b => (a -> b) -> Scope Int Expr b -> m (Scope Int Expr b)
+        liftLambdas'Scope ctx' = fmap toScope . liftLambdas' (F . ctx') . fromScope
 
 fun1 :: Expr String
 fun1 = lam ["x"] $ Call (Var "x") [lam ["y"] $ Call (Var "x") [Var "y"]]
 
 example1 :: MonadState [String] m => m String
 example1 = do
-  (expr, defs) <- runWriterT $ liftLambdas id fun1
+  (expr, defs) <- liftLambdas fun1
   (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
     ppr id id fun1 <*>
     ppr id id expr <*>
@@ -183,7 +186,7 @@ y =
 
 example2 :: MonadState [String] m => m String
 example2 = do
-  (expr, defs) <- runWriterT $ liftLambdas id y
+  (expr, defs) <- liftLambdas y
   (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
     ppr id id y <*>
     ppr id id expr <*>
@@ -197,3 +200,6 @@ succ' = lam ["x"] $ Add (Int 1) (Var "x")
 
 tripleAdd' :: Expr String
 tripleAdd' = lam ["x", "y", "z"] $ Add (Add (Var "x") (Var "y")) (Var "z")
+
+compose' :: Expr String
+compose' = lam ["f", "g", "x"] $ Call (Var "f") [Call (Var "g") [Var "x"]]

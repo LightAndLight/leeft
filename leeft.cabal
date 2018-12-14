@@ -20,6 +20,7 @@ library
                      , OrderedSet
                      , Compile
   build-depends:       base >=4.11 && <5
+                     , containers
                      , grin
                      , lens
                      , mtl
