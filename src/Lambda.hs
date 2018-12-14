@@ -7,13 +7,13 @@
 module Lambda where
 
 import Bound (Scope)
-import Bound.Scope (fromScope, toScope, abstract, instantiateVars)
+import Bound.Scope (fromScope, toScope, abstract)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
-import Control.Lens.TH (makePrisms)
 import Control.Monad.State (MonadState, runState, get, gets, put)
 import Control.Monad.Writer (MonadWriter, tell, runWriterT)
 import Data.Deriving (deriveEq1, deriveShow1)
+import Data.Int (Int64)
 import Data.List (elemIndex, intercalate)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.String (IsString(..))
@@ -26,6 +26,8 @@ data Expr a
   = Var a
   | Call (Expr a) (NonEmpty (Expr a))
   | Lam Int (Scope Int Expr a)
+  | Int !Int64
+  | Add (Expr a) (Expr a)
   deriving (Functor, Foldable, Traversable)
 deriveShow1 ''Expr
 deriveEq1 ''Expr
@@ -43,11 +45,13 @@ ppr
 ppr avar = go1
   where
     go1
-      :: forall b
-       . (b -> String)
-      -> Expr b
+      :: forall c
+       . (c -> String)
+      -> Expr c
       -> m String
     go1 bvar (Var a) = pure $ bvar a
+    go1 _ (Int a) = pure $ show a
+    go1 bvar (Add a b) = (\a' b' -> a' <> " + " <> b') <$> go3 bvar a <*> go2 bvar b
     go1 bvar (Call f xs) =
       (\f' xs' -> f' <> " " <> intercalate " " (NonEmpty.toList xs')) <$>
       go2 bvar f <*> traverse (go2 bvar) xs
@@ -56,12 +60,25 @@ ppr avar = go1
       (\s' -> "\\" <> intercalate " " ns <> " -> " <> s') <$>
         go1 (unvar (ns !!) bvar) (fromScope s)
 
+    go3
+      :: forall c
+       . (c -> String)
+      -> Expr c
+      -> m String
+    go3 bvar e@Var{} = go1 bvar e
+    go3 bvar e@Int{} = go1 bvar e
+    go3 bvar e@Add{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
+    go3 bvar e@Call{} = go2 bvar e
+    go3 bvar e@Lam{} = go2 bvar e
+
     go2
-      :: forall b
-       . (b -> String)
-      -> Expr b
+      :: forall c
+       . (c -> String)
+      -> Expr c
       -> m String
     go2 bvar e@Var{} = go1 bvar e
+    go2 bvar e@Int{} = go1 bvar e
+    go2 bvar e@Add{} = go1 bvar e
     go2 bvar e@Call{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
     go2 bvar e@Lam{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
 
@@ -105,10 +122,10 @@ closeScope s = (res, l, Ordered.toList st)
       unvar
         (pure . B . (+l))
         (\a -> do
-          (n, st) <- gets $ Ordered.posInsertMay a
-          case st of
+          (n, st') <- gets $ Ordered.posInsertMay a
+          case st' of
             Nothing -> pure $ B n
-            Just st' -> B n <$ put st')
+            Just st'' -> B n <$ put st'')
 
     (res, st) =
       runState
@@ -118,7 +135,7 @@ closeScope s = (res, l, Ordered.toList st)
 data Lifted a = Lifted a (Expr Void)
 
 nameSupply :: (IsString s, Semigroup s) => [s]
-nameSupply = ("v" <>) . fromString . show <$> [1..]
+nameSupply = ("v" <>) . fromString . show <$> [1::Int ..]
 
 liftLambdas
   :: forall a m
@@ -126,6 +143,8 @@ liftLambdas
   => forall b. Eq b => (a -> b) -> Expr b -> m (Expr b)
 liftLambdas ctx e =
   case e of
+    Int n -> pure $ Int n
+    Add a b -> Add <$> liftLambdas ctx a <*> liftLambdas ctx b
     Var a -> pure $ Var a
     Call f xs -> do
       f' <- liftLambdas ctx f
@@ -142,26 +161,39 @@ liftLambdas ctx e =
             v:vs -> Call (Var $ ctx n) $ v :| vs
   where
     liftLambdasScope :: forall b. Eq b => (a -> b) -> Scope Int Expr b -> m (Scope Int Expr b)
-    liftLambdasScope ctx = fmap toScope . liftLambdas (F . ctx) . fromScope
+    liftLambdasScope ctx' = fmap toScope . liftLambdas (F . ctx') . fromScope
 
-example :: MonadState [String] m => m String
-example = do
-  let input = lam ["x"] $ Call (Var "x") [lam ["y"] $ Call (Var "x") [Var "y"]]
-  (expr, defs) <- runWriterT $ liftLambdas id input
+fun1 :: Expr String
+fun1 = lam ["x"] $ Call (Var "x") [lam ["y"] $ Call (Var "x") [Var "y"]]
+
+example1 :: MonadState [String] m => m String
+example1 = do
+  (expr, defs) <- runWriterT $ liftLambdas id fun1
   (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
-    ppr id id input <*>
+    ppr id id fun1 <*>
     ppr id id expr <*>
     traverse (pprLifted id) defs
 
-y :: MonadState [String] m => m String
-y = do
-  let input =
-        lam ["f"] $
-        Call
-          (lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]])
-          [lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]]]
-  (expr, defs) <- runWriterT $ liftLambdas id input
+y :: Expr String
+y =
+  lam ["f"] $
+  Call
+    (lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]])
+    [lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]]]
+
+example2 :: MonadState [String] m => m String
+example2 = do
+  (expr, defs) <- runWriterT $ liftLambdas id y
   (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
-    ppr id id input <*>
+    ppr id id y <*>
     ppr id id expr <*>
     traverse (pprLifted id) defs
+
+id' :: Expr String
+id' = lam ["x"] $ Var "x"
+
+succ' :: Expr String
+succ' = lam ["x"] $ Add (Int 1) (Var "x")
+
+tripleAdd' :: Expr String
+tripleAdd' = lam ["x", "y", "z"] $ Add (Add (Var "x") (Var "y")) (Var "z")

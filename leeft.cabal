@@ -18,13 +18,16 @@ cabal-version:       >=2
 library
   exposed-modules:     Lambda
                      , OrderedSet
+                     , Compile
   build-depends:       base >=4.11 && <5
+                     , grin
                      , lens
                      , mtl
                      , bound
                      , deriving-compat
                      , transformers >=0.5
   hs-source-dirs:      src
+  ghc-options:         -Wall
   default-language:    Haskell2010
 
 test-suite leeft-tests

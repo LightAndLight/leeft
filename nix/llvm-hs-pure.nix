@@ -1,20 +1,17 @@
-{ mkDerivation, attoparsec, base, bytestring, containers, fail
-, hspec, mtl, stdenv, tasty, tasty-hunit, tasty-quickcheck
-, template-haskell, text, transformers, unordered-containers
+{ mkDerivation, attoparsec, base, bytestring, containers, fail, mtl
+, stdenv, tasty, tasty-hunit, tasty-quickcheck, template-haskell
+, transformers, unordered-containers
 }:
 mkDerivation {
   pname = "llvm-hs-pure";
-  version = "5.1.2";
-  sha256 = "c4d0993aacda72107e6d34865421f128b8c27b586b95a68e2a3e94700645d954";
-  revision = "1";
-  editedCabalFile = "06qlvh3rm7msxffsmlkk0mbm5p1pclv7hnmi72k76h0hk699d3zg";
+  version = "7.0.0";
+  sha256 = "af9d7cdd512c4d33f7ad60deb445b72b1ecccff4e3968dd3f51327846c6402ad";
   libraryHaskellDepends = [
     attoparsec base bytestring containers fail mtl template-haskell
     transformers unordered-containers
   ];
   testHaskellDepends = [
-    base bytestring containers hspec mtl tasty tasty-hunit
-    tasty-quickcheck text transformers unordered-containers
+    base containers mtl tasty tasty-hunit tasty-quickcheck transformers
   ];
   homepage = "http://github.com/llvm-hs/llvm-hs/";
   description = "Pure Haskell LLVM functionality (no FFI)";

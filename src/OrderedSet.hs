@@ -23,14 +23,14 @@ toList (Set _ s) = s
 insert :: Eq a => a -> Set a -> Set a
 insert a (Set n s) = go n s
   where
-    go n s =
-      case s of
-        [] -> Set (n+1) [a]
+    go m t =
+      case t of
+        [] -> Set (m+1) [a]
         x:xs
-          | x == a -> Set n s
+          | x == a -> Set m t
           | otherwise ->
-            case go n xs of
-              Set n' xs' -> Set n' $ x : xs'
+            case go m xs of
+              Set m' xs' -> Set m' $ x : xs'
 
 -- | Get the position of an element
 pos :: Eq a => a -> Set a -> Maybe Int
@@ -45,12 +45,12 @@ posInsert a s = fromMaybe s <$> posInsertMay a s
 posInsertMay :: Eq a => a -> Set a -> (Int, Maybe (Set a))
 posInsertMay a (Set sz s) = go 0 sz s
   where
-    go !n sz [] = (n, Just $ Set (sz+1) [a])
-    go !n sz (x:xs)
+    go !n szz [] = (n, Just $ Set (szz+1) [a])
+    go !n szz (x:xs)
       | x == a = (n, Nothing)
       | otherwise =
-        case go (n+1) sz xs of
+        case go (n+1) szz xs of
           (n', res) ->
             case res of
               Nothing -> (n', Nothing)
-              Just (Set sz' xs') -> (n', Just $ Set sz' (x:xs'))
+              Just (Set szz' xs') -> (n', Just $ Set szz' (x:xs'))

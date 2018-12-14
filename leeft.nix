@@ -1,5 +1,5 @@
 { mkDerivation, base, bound, deriving-compat, grin, hedgehog
-, lens, mtl, stdenv, transformers
+, lens, mtl, stdenv, transformers, llc-7
 }:
 mkDerivation {
   pname = "leeft";
@@ -10,5 +10,6 @@ mkDerivation {
     transformers
   ];
   testHaskellDepends = [ base bound hedgehog mtl ];
+  buildTools = [ llc-7 ];
   license = stdenv.lib.licenses.bsd3;
 }

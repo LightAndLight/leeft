@@ -1,18 +1,13 @@
-{ mkDerivation, array, base, bytestring, directory, fetchgit
-, filepath, llvm-hs, llvm-hs-pure, mtl, stdenv, tasty, tasty-golden
-, tasty-hspec, tasty-hunit, text, transformers, wl-pprint-text
+{ mkDerivation, array, base, bytestring, directory, filepath
+, llvm-hs, llvm-hs-pure, mtl, prettyprinter, stdenv, tasty
+, tasty-golden, tasty-hspec, tasty-hunit, text, transformers
 }:
 mkDerivation {
   pname = "llvm-hs-pretty";
-  version = "0.2.1.1";
-  src = fetchgit {
-    url = "https://github.com/lightandlight/llvm-hs-pretty.git";
-    sha256 = "1lkgv53d4k1aharf7s8xirwxlh187y0lcwh07yhfjsz5754qy47n";
-    rev = "7f28d7d3e81549f44699f2283c5c195f69dbd704";
-    fetchSubmodules = true;
-  };
+  version = "0.6.1.0";
+  sha256 = "aa5d71109f1e2d730b5674fa36dd92bfeb2af7ed64fad9b6a01214a7e6cc818b";
   libraryHaskellDepends = [
-    array base bytestring llvm-hs-pure text wl-pprint-text
+    array base bytestring llvm-hs-pure prettyprinter text
   ];
   testHaskellDepends = [
     base directory filepath llvm-hs llvm-hs-pure mtl tasty tasty-golden

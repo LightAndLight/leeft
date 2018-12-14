@@ -1,0 +1,3 @@
+[submodule "grin"]
+	path = grin
+	url = git@github.com:lightandlight/grin.git
