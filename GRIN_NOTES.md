@@ -7,3 +7,5 @@ https://github.com/grin-tech/grin/blob/master/grin/src/Reducer/LLVM/PrimOps.hs
 
 Why is Program a constructor for Exp? It should be its own type. Those
 datatypes should mimic the abstract syntax from the paper.
+
+Variables in your language need to be fetched from

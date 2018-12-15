@@ -11,6 +11,7 @@ import Bound.Scope (fromScope, toScope, abstract)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
 import Control.Monad.State (MonadState, runState, get, gets, put)
+import Control.Monad.Trans (lift)
 import Control.Monad.Writer (MonadWriter, tell, runWriterT)
 import Data.Deriving (deriveEq1, deriveShow1)
 import Data.Int (Int64)
@@ -21,6 +22,11 @@ import Data.Void (Void, absurd)
 
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified OrderedSet as Ordered
+
+freshName :: MonadState [a] m => m a
+freshName = do
+  xs <- get
+  head xs <$ put (tail xs)
 
 data Expr a
   = Var a
@@ -107,6 +113,13 @@ apply1 a =
   (>>= unvar (\n -> if n == 0 then F <$> a else pure $ B (n-1)) (pure . F)) .
   fromScope
 
+closeExpr
+  :: forall b
+   . Eq b
+  => Expr b
+  -> (Scope Int Expr Void, Int, [b])
+closeExpr = closeScope . lift
+
 -- | Close over a scope, returning the new scope, the number of variables abstracted,
 -- and a list of the abstracted variables
 closeScope
@@ -155,7 +168,7 @@ liftLambdas = runWriterT . liftLambdas' id
           pure $ Call f' xs'
         Lam as s -> do
           s' <- liftLambdas'Scope ctx s
-          n <- do; xs <- get; head xs <$ put (tail xs)
+          n <- freshName
           case closeScope s' of
             (s'', lxs, xs) -> do
               tell [Lifted n $ Lam (as + lxs) s'']
@@ -163,8 +176,74 @@ liftLambdas = runWriterT . liftLambdas' id
                 [] -> Var $ ctx n
                 v:vs -> Call (Var $ ctx n) $ v :| vs
       where
-        liftLambdas'Scope :: forall b. Eq b => (a -> b) -> Scope Int Expr b -> m (Scope Int Expr b)
-        liftLambdas'Scope ctx' = fmap toScope . liftLambdas' (F . ctx') . fromScope
+        liftLambdas'Scope
+          :: forall b
+           . Eq b
+          => (a -> b)
+          -> Scope Int Expr b
+          -> m (Scope Int Expr b)
+        liftLambdas'Scope ctx' =
+          fmap toScope . liftLambdas' (F . ctx') . fromScope
+
+defunctionalize :: (MonadState [a] m, Eq a) => Expr a -> m (Expr a, [Lifted a])
+defunctionalize = runWriterT . defunctionalize' False id
+  where
+    defunctionalize'
+      :: forall a m
+      . (MonadState [a] m, MonadWriter [Lifted a] m)
+      => forall b. Eq b => Bool -> (a -> b) -> Expr b -> m (Expr b)
+    defunctionalize' rip ctx e =
+      case e of
+        Int n -> pure $ Int n
+        Add a b -> do
+          res <-
+            Add <$>
+            defunctionalize' True ctx a <*>
+            defunctionalize' True ctx b
+          if rip
+          then
+            case closeExpr res of
+              (res', num, vals) -> do
+                name <- freshName
+                tell [Lifted name $ Lam num res']
+                pure $ case Var <$> vals of
+                  [] -> Var $ ctx name
+                  v:vs -> Call (Var $ ctx name) $ v :| vs
+          else pure res
+        Var a -> pure $ Var a
+        Call f xs -> do
+          f' <- defunctionalize' False ctx f
+          xs' <- traverse (defunctionalize' True ctx) xs
+          let res = Call f' xs'
+          if rip
+            then
+              case closeExpr res of
+                (res', num, vals) -> do
+                  name <- freshName
+                  tell [Lifted name $ Lam num res']
+                  pure $ case Var <$> vals of
+                    [] -> Var $ ctx name
+                    v:vs -> Call (Var $ ctx name) $ v :| vs
+            else pure res
+        Lam as s -> do
+          s' <- defunctionalize'Scope rip ctx s
+          n <- freshName
+          case closeScope s' of
+            (s'', lxs, xs) -> do
+              tell [Lifted n $ Lam (as + lxs) s'']
+              pure $ case Var <$> xs of
+                [] -> Var $ ctx n
+                v:vs -> Call (Var $ ctx n) $ v :| vs
+      where
+        defunctionalize'Scope
+          :: forall b
+           . Eq b
+          => Bool
+          -> (a -> b)
+          -> Scope Int Expr b
+          -> m (Scope Int Expr b)
+        defunctionalize'Scope rip' ctx' =
+          fmap toScope . defunctionalize' rip' (F . ctx') . fromScope
 
 fun1 :: Expr String
 fun1 = lam ["x"] $ Call (Var "x") [lam ["y"] $ Call (Var "x") [Var "y"]]
