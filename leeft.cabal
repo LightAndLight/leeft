@@ -17,6 +17,7 @@ cabal-version:       >=2
 
 library
   exposed-modules:     Lambda
+                     , Defun
                      , OrderedSet
                      , Compile
   build-depends:       base >=4.11 && <5
