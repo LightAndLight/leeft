@@ -1,15 +1,20 @@
 {-# language DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# language DeriveGeneric #-}
 {-# language FlexibleContexts #-}
 {-# language TemplateHaskell #-}
+{-# language KindSignatures, TypeFamilies #-}
 module Defun where
 
 import Bound.Scope (Scope, toScope, fromScope)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
+import Control.Lens.Plated (Plated(..), gplate)
 import Control.Monad.Trans (lift)
 import Data.Int (Int64)
+import Data.Functor.Foldable.TH (makeBaseFunctor)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Void (Void, absurd)
+import GHC.Generics (Generic)
 
 import Fresh.Class (MonadFresh)
 import qualified Lambda as Lambda
@@ -21,8 +26,11 @@ data Defun a b
   | App (Defun a b) (NonEmpty (Defun a b))
   | Int !Int64
   | Add (Defun a b) (Defun a b)
-  deriving (Eq, Show, Functor, Foldable, Traversable)
+  deriving (Eq, Show, Functor, Foldable, Traversable, Generic)
 makeBound ''Defun
+makeBaseFunctor ''Defun
+
+instance Plated (Defun a b) where; plate = gplate
 
 data Def a = Def a !Int (Scope Int (Defun a) Void)
 

@@ -7,10 +7,11 @@ module Compile where
 
 import Bound.Scope (fromScope)
 import Bound.Var (Var(..), unvar)
-import Control.Monad (guard, replicateM)
+import Control.Monad (guard, replicateM, unless)
 import Control.Monad.Cont (ContT(..))
 import Control.Monad.State (MonadState, gets, modify, execState)
-import Data.Foldable (toList, traverse_, foldl')
+import Data.Foldable (toList, foldl')
+import Data.Functor.Foldable (cata)
 import Data.IntMap (IntMap)
 import Data.String (IsString(..))
 import Data.Void (absurd)
@@ -76,11 +77,11 @@ defToGrin name (Def n arity s) =
     s' <-
       runExpBuilderT
         (exprToGrin
-           TopLevel
            F
            arsB
            (unvar (names !!) name)
-           (fromScope $ absurd <$> s))
+           (fromScope $ absurd <$> s)
+           TopLevel)
         (pure . Grin.SReturn . Grin.Var)
     pure (names, s')
   where
@@ -101,74 +102,80 @@ mkCInt =
 data Level = TopLevel | Inner
 
 exprToGrin
-  :: MonadFresh s a m
-  => Level
-  -> (a -> b)
+  :: forall s a b m
+   . MonadFresh s a m
+  => (a -> b)
   -> (b -> Maybe Int)
   -> (b -> Grin.Name)
   -> Defun a b
+  -> Level
   -> ExpBuilderT m Grin.Name
-exprToGrin _ ctx _ nameB (Int n) =
-  yieldExp (nameB . ctx) $
-  Grin.SStore $
-  mkCInt (Grin.Lit $ Grin.LInt64 n)
-exprToGrin _ ctx arsB nameB (Add a b) = do
-  a' <-
-    evalAs (nameB . ctx) cInt .
-    Grin.Var =<< exprToGrin Inner ctx arsB nameB a
-  b' <-
-    evalAs (nameB . ctx) cInt .
-    Grin.Var =<< exprToGrin Inner ctx arsB nameB b
-  c <-
-    yieldExp
-    (nameB . ctx)
-    (Grin.SApp (Grin.packName "_prim_int_add") [Grin.Var a', Grin.Var b'])
-  yieldExp (nameB . ctx) $ Grin.SStore $ cInt c
-exprToGrin level ctx _ nameB (Var a) =
-  case level of
-    Inner -> pure $ nameB a
-    TopLevel -> evalAs (nameB . ctx) Grin.Var (Grin.Var $ nameB a)
-exprToGrin level ctx arsB nameB (App f xs) = do
-  f' <- exprToGrin Inner ctx arsB nameB f
-  xs' <- traverse (exprToGrin Inner ctx arsB nameB) (toList xs)
-  case level of
-    Inner ->
-      yieldExp (nameB . ctx) . Grin.SStore $
-        Grin.ConstTagNode
-          (Grin.Tag Grin.F . Grin.packName $ "ap" <> show (length xs))
-          (Grin.Var f' : fmap Grin.Var (toList xs'))
-    TopLevel -> do
-      a <-
-        yieldExp (nameB . ctx) . Grin.SStore $
-          Grin.ConstTagNode
-            (Grin.Tag Grin.F . Grin.packName $ "ap" <> show (length xs))
-            (Grin.Var f' : fmap Grin.Var (toList xs'))
-      evalAs (nameB . ctx) Grin.Var (Grin.Var a)
-exprToGrin _ ctx arsB nameB (Global a) =
-  case arsB $ ctx a of
-    Nothing -> error "no arity for global function"
-    Just ar ->
-      yieldExp (nameB . ctx) . Grin.SStore $
-        Grin.ConstTagNode
-          (Grin.Tag (Grin.P ar) $ nameB $ ctx a)
-          []
-exprToGrin _ ctx arsB nameB (Call a xs) = do
-  xs' <- traverse (exprToGrin Inner ctx arsB nameB) (toList xs)
-  case arsB $ ctx a of
-    Nothing -> yieldExp (nameB . ctx) $ Grin.SApp (nameB $ ctx a) (Grin.Var <$> xs')
-    Just ar -> do
-      let missing = ar - length xs
-      if missing == 0
-        then
+exprToGrin ctx arsB nameB = cata go
+  where
+    go
+      :: DefunF a b (Level -> ExpBuilderT m Grin.Name)
+      -> Level
+      -> ExpBuilderT m Grin.Name
+    go (IntF n) _ =
+      yieldExp (nameB . ctx) $
+      Grin.SStore $
+      mkCInt (Grin.Lit $ Grin.LInt64 n)
+    go (AddF a b) _ = do
+      a' <- evalAs (nameB . ctx) cInt . Grin.Var =<< a Inner
+      b' <- evalAs (nameB . ctx) cInt . Grin.Var =<< b Inner
+      c <-
+        yieldExp
+        (nameB . ctx)
+        (Grin.SApp (Grin.packName "_prim_int_add") [Grin.Var a', Grin.Var b'])
+      d <- yieldExp (nameB . ctx) $ Grin.SStore $ cInt c
+      evalAs (nameB . ctx) Grin.Var $ Grin.Var d
+    go (AppF f xs) level = do
+      f' <- f Inner
+      xs' <- traverse ($ Inner) (toList xs)
+      case level of
+        Inner ->
           yieldExp (nameB . ctx) . Grin.SStore $
             Grin.ConstTagNode
-              (Grin.Tag Grin.F $ nameB $ ctx a)
-              (Grin.Var <$> xs')
-        else
+              (Grin.Tag Grin.F . Grin.packName $ "ap" <> show (length xs))
+              (Grin.Var f' : fmap Grin.Var (toList xs'))
+        TopLevel -> do
+          a <-
+            yieldExp (nameB . ctx) . Grin.SStore $
+              Grin.ConstTagNode
+                (Grin.Tag Grin.F . Grin.packName $ "ap" <> show (length xs))
+                (Grin.Var f' : fmap Grin.Var (toList xs'))
+          evalAs (nameB . ctx) Grin.Var (Grin.Var a)
+    go (GlobalF a) _ =
+      case arsB $ ctx a of
+        Nothing -> error "no arity for global function"
+        Just ar ->
           yieldExp (nameB . ctx) . Grin.SStore $
             Grin.ConstTagNode
-              (Grin.Tag (Grin.P missing) $ nameB $ ctx a)
-              (Grin.Var <$> xs')
+              (Grin.Tag (Grin.P ar) $ nameB $ ctx a)
+              []
+    go (CallF a xs) _ = do
+      xs' <- traverse ($ Inner) (toList xs)
+      case arsB $ ctx a of
+        Nothing ->
+          yieldExp (nameB . ctx) $
+          Grin.SApp (nameB $ ctx a) (Grin.Var <$> xs')
+        Just ar -> do
+          let missing = ar - length xs
+          if missing == 0
+            then
+              yieldExp (nameB . ctx) . Grin.SStore $
+                Grin.ConstTagNode
+                  (Grin.Tag Grin.F $ nameB $ ctx a)
+                  (Grin.Var <$> xs')
+            else
+              yieldExp (nameB . ctx) . Grin.SStore $
+                Grin.ConstTagNode
+                  (Grin.Tag (Grin.P missing) $ nameB $ ctx a)
+                  (Grin.Var <$> xs')
+    go (VarF a) level =
+      case level of
+        Inner -> pure $ nameB a
+        TopLevel -> evalAs (nameB . ctx) Grin.Var (Grin.Var $ nameB a)
 
 genAps :: [Def a] -> [(Grin.Name, [Grin.Name], Grin.Exp)]
 genAps ds = toList $ execState (go ds) IntMap.empty
@@ -196,24 +203,25 @@ genAps ds = toList $ execState (go ds) IntMap.empty
         binds = Grin.Var . Grin.packName . ("b" <>) . show <$> [0..n]
 
     goExpr
-      :: MonadState (IntMap (Grin.Name, [Grin.Name], Grin.Exp)) m
+      :: forall a b m
+       . MonadState (IntMap (Grin.Name, [Grin.Name], Grin.Exp)) m
       => Defun a b
       -> m ()
-    goExpr e =
-      case e of
-        App f xs -> do
-          goExpr f
-          traverse_ goExpr xs
+    goExpr = cata alg
+      where
+        alg :: DefunF a b (m ()) -> m ()
+        alg (AppF f xs) = do
+          f *> sequence_ xs
+
           let lxs = length xs
-          res <- gets $ IntMap.member lxs
-          if res
-            then pure ()
-            else modify $ IntMap.insert lxs (genAp lxs)
-        Call _ xs -> traverse_ goExpr xs
-        Add a b -> goExpr a *> goExpr b
-        Global _ -> pure ()
-        Var _ -> pure ()
-        Int _ -> pure ()
+          generated <- gets $ IntMap.member lxs
+
+          unless generated . modify $ IntMap.insert lxs (genAp lxs)
+        alg (CallF _ xs) = sequence_ xs
+        alg (AddF a b) = a *> b
+        alg (GlobalF _) = pure ()
+        alg (VarF _) = pure ()
+        alg (IntF _) = pure ()
 
 exprToProgram
   :: (Show a, IsString a, Semigroup a, Eq a, MonadFresh s a m)
@@ -222,17 +230,22 @@ exprToProgram
   -> m Grin.Exp
 exprToProgram name e = do
   (e1, defs1) <- defun e
+
   defs2 <- (genAps defs1 <>) <$> traverse (defToGrin name) defs1
+
   let arities a = lookup (name a) $ (\(b, c, _) -> (b, length c)) <$> defs2
+
   e3 <- flip runExpBuilderT (pure . Grin.SReturn . Grin.Var) $ do
-    e3 <- exprToGrin TopLevel id arities name e1
+    e3 <- exprToGrin id arities name e1 TopLevel
     res <- evalAs name cInt (Grin.Var e3)
     yieldExp name $ Grin.SApp (Grin.packName "_prim_int_print") [Grin.Var res]
+
   let
     p = Grin.Program $
       fmap (\(a, b, c) -> Grin.Def a b c) defs2 <>
       [ Grin.Def (Grin.packName "grinMain") [] e3
       ]
+
   pure $ Grin.generateEval p
 
 --- optimization

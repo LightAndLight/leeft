@@ -23,6 +23,7 @@ library
                      , OrderedSet
                      , Compile
   build-depends:       base >=4.11 && <5
+                     , recursion-schemes
                      , containers
                      , grin
                      , lens

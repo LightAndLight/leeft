@@ -41,7 +41,6 @@ makeBound ''Expr
 deriving instance Show a => Show (Expr a)
 deriving instance Eq a => Eq (Expr a)
 
-
 lam :: Eq a => [a] -> Expr a -> Expr a
 lam as e =
   case e of

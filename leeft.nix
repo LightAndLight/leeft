@@ -1,5 +1,5 @@
 { mkDerivation, ansi-wl-pprint, base, bound, deriving-compat, grin, hedgehog
-, lens, mtl, stdenv, transformers, llc-7
+, lens, mtl, stdenv, recursion-schemes, transformers, llc-7
 }:
 mkDerivation {
   pname = "leeft";
@@ -7,7 +7,7 @@ mkDerivation {
   src = ./.;
   libraryHaskellDepends = [
     ansi-wl-pprint base bound deriving-compat grin lens mtl
-    transformers
+    recursion-schemes transformers
   ];
   testHaskellDepends = [ base bound hedgehog mtl ];
   buildTools = [ llc-7 ];
