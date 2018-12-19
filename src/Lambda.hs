@@ -1,3 +1,4 @@
+{-# language BangPatterns #-}
 {-# language FlexibleContexts #-}
 {-# language OverloadedLists #-}
 {-# language OverloadedStrings #-}
@@ -10,7 +11,8 @@ import Bound (Scope)
 import Bound.Scope (fromScope, toScope, abstract)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
-import Control.Monad.State (MonadState, runState, get, gets, put)
+import Control.Monad (replicateM)
+import Control.Monad.State (runState, gets, put)
 import Control.Monad.Trans (lift)
 import Control.Monad.Writer (MonadWriter, tell, runWriterT)
 import Data.Deriving (deriveEq1, deriveShow1)
@@ -20,13 +22,9 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.String (IsString(..))
 import Data.Void (Void, absurd)
 
+import Fresh.Class (MonadFresh, fresh, Stream(..))
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified OrderedSet as Ordered
-
-freshName :: MonadState [a] m => m a
-freshName = do
-  xs <- get
-  head xs <$ put (tail xs)
 
 data Expr a
   = Var a
@@ -42,8 +40,8 @@ deriving instance Show a => Show (Expr a)
 deriving instance Eq a => Eq (Expr a)
 
 ppr
-  :: forall a b m
-   . MonadState [a] m
+  :: forall s a b m
+   . MonadFresh s a m
   => (a -> String)
   -> (b -> String)
   -> Expr b
@@ -62,7 +60,7 @@ ppr avar = go1
       (\f' xs' -> f' <> " " <> intercalate " " (NonEmpty.toList xs')) <$>
       go2 bvar f <*> traverse (go2 bvar) xs
     go1 bvar (Lam n s) = do
-      ns <- do; (xs, xs') <- gets (splitAt n); fmap avar xs <$ put xs'
+      ns <- replicateM n $ avar <$> fresh
       (\s' -> "\\" <> intercalate " " ns <> " -> " <> s') <$>
         go1 (unvar (ns !!) bvar) (fromScope s)
 
@@ -88,7 +86,7 @@ ppr avar = go1
     go2 bvar e@Call{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
     go2 bvar e@Lam{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
 
-pprLifted :: MonadState [a] m => (a -> String) -> Lifted a -> m String
+pprLifted :: MonadFresh s a m => (a -> String) -> Lifted a -> m String
 pprLifted var (Lifted a e) =
   (\e' -> var a <> " = " <> e') <$>
   ppr var absurd e
@@ -147,15 +145,18 @@ closeScope s = (res, l, Ordered.toList st)
 
 data Lifted a = Lifted a (Expr Void)
 
-nameSupply :: (IsString s, Semigroup s) => [s]
-nameSupply = ("v" <>) . fromString . show <$> [1::Int ..]
+nameSupply :: forall s. (IsString s, Semigroup s) => Stream s
+nameSupply = go 0
+  where
+    go :: Int -> Stream s
+    go !n = Cons ("v" <> fromString (show n)) (go $ n+1)
 
-liftLambdas :: (MonadState [a] m, Eq a) => Expr a -> m (Expr a, [Lifted a])
+liftLambdas :: (MonadFresh s a m, Eq a) => Expr a -> m (Expr a, [Lifted a])
 liftLambdas = runWriterT . liftLambdas' id
   where
     liftLambdas'
-      :: forall a m
-      . (MonadState [a] m, MonadWriter [Lifted a] m)
+      :: forall s a m
+      . (MonadFresh s a m, MonadWriter [Lifted a] m)
       => forall b. Eq b => (a -> b) -> Expr b -> m (Expr b)
     liftLambdas' ctx e =
       case e of
@@ -168,7 +169,7 @@ liftLambdas = runWriterT . liftLambdas' id
           pure $ Call f' xs'
         Lam as s -> do
           s' <- liftLambdas'Scope ctx s
-          n <- freshName
+          n <- fresh
           case closeScope s' of
             (s'', lxs, xs) -> do
               tell [Lifted n $ Lam (as + lxs) s'']
@@ -188,7 +189,7 @@ liftLambdas = runWriterT . liftLambdas' id
 fun1 :: Expr String
 fun1 = lam ["x"] $ Call (Var "x") [lam ["y"] $ Call (Var "x") [Var "y"]]
 
-example1 :: MonadState [String] m => m String
+example1 :: MonadFresh s String m => m String
 example1 = do
   (expr, defs) <- liftLambdas fun1
   (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
@@ -203,7 +204,7 @@ y =
     (lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]])
     [lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]]]
 
-example2 :: MonadState [String] m => m String
+example2 :: MonadFresh s String m => m String
 example2 = do
   (expr, defs) <- liftLambdas y
   (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>

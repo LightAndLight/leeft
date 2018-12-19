@@ -18,6 +18,8 @@ cabal-version:       >=2
 library
   exposed-modules:     Lambda
                      , Defun
+                     , Fresh.Trans
+                     , Fresh.Class
                      , OrderedSet
                      , Compile
   build-depends:       base >=4.11 && <5

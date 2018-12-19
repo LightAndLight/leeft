@@ -6,11 +6,12 @@ module Defun where
 import Bound.Scope (Scope, toScope, fromScope)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
-import Control.Monad.State (MonadState)
 import Control.Monad.Trans (lift)
 import Data.Int (Int64)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Void (Void, absurd)
+
+import Fresh.Class (MonadFresh)
 import qualified Lambda as Lambda
 
 data Defun a b
@@ -26,7 +27,7 @@ makeBound ''Defun
 data Def a = Def a !Int (Scope Int (Defun a) Void)
 
 defun
-  :: (Eq a, MonadState [a] m)
+  :: (Eq a, MonadFresh s a m)
   => Lambda.Expr a
   -> m (Defun a a, [Def a])
 defun e = do

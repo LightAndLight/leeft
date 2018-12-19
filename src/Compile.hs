@@ -2,35 +2,32 @@
 {-# language OverloadedStrings #-}
 {-# language PatternSynonyms #-}
 {-# language ScopedTypeVariables #-}
+{-# language QuasiQuotes #-}
 module Compile where
 
-import Debug.Trace
-
-import Bound.Scope (fromScope, toScope)
+import Bound.Scope (fromScope)
 import Bound.Var (unvar)
-import Control.Applicative ((<|>))
-import Control.Monad (guard)
+import Control.Monad (guard, replicateM)
 import Control.Monad.Cont (ContT(..))
-import Control.Monad.State (MonadState, gets, put, modify, execState)
-import Control.Monad.Writer (WriterT, runWriterT, tell)
-import Data.Bifunctor (bimap, second)
+import Control.Monad.State (MonadState, gets, modify, execState)
 import Data.Foldable (toList, traverse_, foldl')
 import Data.IntMap (IntMap)
 import Data.String (IsString(..))
 import Data.Void (absurd)
 
-import Defun
-import Lambda (freshName)
-import qualified Lambda (Expr)
 import qualified Data.IntMap as IntMap
-import qualified Data.List.NonEmpty as NonEmpty
 import qualified Grin.Grin as Grin (packName)
 import qualified Grin.Syntax as Grin (Exp(..), Name, Val(..), Lit(..))
 import qualified Grin.SyntaxDefs as Grin (Tag(..), TagType(..))
 import qualified Pipeline.Pipeline as Grin (optimizeWith)
 import qualified Pipeline.Definitions as Grin (Transformation(..), PipelineStep(..), Path(..), defaultOpts)
-import qualified Pipeline.Utils as Grin (defaultOptimizations, defaultOnChange, defaultCleanUp)
+import qualified Pipeline.Utils as Grin (defaultOnChange, defaultCleanUp)
 import qualified Transformations.GenerateEval as Grin (generateEval)
+
+import Defun
+import Fresh.Class (MonadFresh, fresh)
+
+import qualified Lambda (Expr)
 
 arities :: Eq a => [Def a] -> a -> Maybe Int
 arities [] _ = Nothing
@@ -40,20 +37,20 @@ arities (Def a n _:xs) a' =
   else arities xs a'
 
 defsToGrin
-  :: (MonadState [a] m, Eq a)
+  :: (MonadFresh s a m, Eq a)
   => (a -> Grin.Name)
   -> [Def a]
   -> m [(Grin.Name, [Grin.Name], Grin.Exp)]
 defsToGrin name = traverse (defToGrin name)
 
 defToGrin
-  :: (Eq a, MonadState [a] m)
+  :: (Eq a, MonadFresh s a m)
   => (a -> Grin.Name)
   -> Def a
   -> m (Grin.Name, [Grin.Name], Grin.Exp)
 defToGrin name (Def n arity s) =
   uncurry ((,,) $ name n) <$> do
-    names <- do; (xs, xs') <- gets (splitAt arity); fmap name xs <$ put xs'
+    names <- replicateM arity $ name <$> fresh
     s' <-
       runContT
         (exprToGrin
@@ -70,21 +67,14 @@ defToGrin name (Def n arity s) =
     arsB = unvar (const Nothing) arsA
 
 
-collapse
-  :: [Either (Grin.Exp -> Grin.Exp, Grin.Val) Grin.Val]
-  -> (Grin.Exp -> Grin.Exp, [Grin.Val])
-collapse [] = (id, [])
-collapse (Left (g, x) : rest) = bimap (. g) (x :) (collapse rest)
-collapse (Right x : rest) = second (x :) (collapse rest)
-
 yieldExp
-  :: MonadState [a] m
+  :: MonadFresh s a m
   => (a -> Grin.Name)
   -> Grin.Exp
   -> ContT Grin.Exp m Grin.Name
 yieldExp nameA ea =
   ContT $ \f -> do
-    n <- nameA <$> freshName
+    n <- nameA <$> fresh
     Grin.EBind ea (Grin.Var n) <$> f n
 
 cInt :: Grin.Val -> Grin.Val
@@ -93,20 +83,20 @@ cInt =
   pure
 
 evalAs
-  :: MonadState [a] m
+  :: MonadFresh s a m
   => (a -> Grin.Name)
   -> (Grin.Name -> Grin.Val)
   -> Grin.Val
   -> ContT Grin.Exp m Grin.Name
 evalAs nameA as xs =
   ContT $ \f -> do
-    n <- nameA <$> freshName
+    n <- nameA <$> fresh
     Grin.EBind (Grin.SApp (Grin.packName "eval") [xs]) (as n) <$> f n
 
 data Level = TopLevel | Inner
 
 exprToGrin
-  :: MonadState [a] m
+  :: MonadFresh s a m
   => Level
   -> (a -> Maybe Int)
   -> (b -> Maybe Int)
@@ -143,11 +133,14 @@ exprToGrin level arsA arsB nameA nameB (App f xs) = do
         Grin.ConstTagNode
           (Grin.Tag Grin.F . Grin.packName $ "ap" <> show (length xs))
           (Grin.Var f' : fmap Grin.Var (toList xs'))
-    TopLevel ->
-      yieldExp nameA $
-        Grin.SApp
-          (Grin.packName $ "ap" <> show (length xs))
-          (Grin.Var f' : fmap Grin.Var (toList xs'))
+    TopLevel -> do
+      a <-
+        yieldExp nameA . Grin.SStore $
+          Grin.ConstTagNode
+            (Grin.Tag Grin.F . Grin.packName $ "ap" <> show (length xs))
+            (Grin.Var f' : fmap Grin.Var (toList xs'))
+      evalAs nameA Grin.Var (Grin.Var a)
+
 exprToGrin _ arsA _ nameA _ (Global a) =
   case arsA a of
     Nothing -> error "no arity for global function"
@@ -156,7 +149,7 @@ exprToGrin _ arsA _ nameA _ (Global a) =
         Grin.ConstTagNode
           (Grin.Tag (Grin.P ar) $ nameA a)
           []
-exprToGrin level arsA arsB nameA nameB (Call a xs) = do
+exprToGrin _ arsA arsB nameA nameB (Call a xs) = do
   xs' <- traverse (exprToGrin Inner arsA arsB nameA nameB) (toList xs)
   case arsA a of
     Nothing -> yieldExp nameA $ Grin.SApp (nameA a) (Grin.Var <$> xs')
@@ -214,7 +207,7 @@ genAps ds = toList $ execState (go ds) IntMap.empty
         Int _ -> pure ()
 
 exprToProgram
-  :: (Show a, IsString a, Semigroup a, Eq a, MonadState [a] m)
+  :: (Show a, IsString a, Semigroup a, Eq a, MonadFresh s a m)
   => (a -> Grin.Name)
   -> Lambda.Expr a
   -> m Grin.Exp
@@ -233,13 +226,36 @@ exprToProgram name e = do
       ]
   pure $ Grin.generateEval p
 
+op :: [Grin.Transformation]
+op =
+  [ Grin.InlineEval
+  , Grin.InlineApply
+  , Grin.EvaluatedCaseElimination
+  , Grin.TrivialCaseElimination
+  , Grin.SparseCaseOptimisation
+  , Grin.UpdateElimination
+  , Grin.NonSharedElimination
+  , Grin.CopyPropagation
+  , Grin.ConstantPropagation
+  , Grin.SimpleDeadFunctionElimination
+  , Grin.SimpleDeadParameterElimination
+  , Grin.SimpleDeadVariableElimination
+  , Grin.DeadCodeElimination
+  , Grin.CommonSubExpressionElimination
+  , Grin.CaseCopyPropagation
+  , Grin.CaseHoisting
+  , Grin.GeneralizedUnboxing
+  , Grin.ArityRaising
+  , Grin.LateInlining
+  ]
+
 optimizeProgram :: Grin.Exp -> IO Grin.Exp
 optimizeProgram e =
   Grin.optimizeWith
     Grin.defaultOpts
     e
     []
-    Grin.defaultOptimizations
-    (Grin.T Grin.InlineEval : Grin.defaultOnChange)
+    op
+    Grin.defaultOnChange
     Grin.defaultCleanUp
     [Grin.PrintAST, Grin.SaveLLVM True "out", Grin.SaveGrin $ Grin.Rel "grin"]
