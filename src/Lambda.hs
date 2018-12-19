@@ -11,16 +11,18 @@ import Bound (Scope)
 import Bound.Scope (fromScope, toScope, abstract)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
-import Control.Monad (replicateM)
 import Control.Monad.State (runState, gets, put)
 import Control.Monad.Trans (lift)
 import Control.Monad.Writer (MonadWriter, tell, runWriterT)
 import Data.Deriving (deriveEq1, deriveShow1)
 import Data.Int (Int64)
-import Data.List (elemIndex, intercalate)
+import Data.List (elemIndex)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.String (IsString(..))
 import Data.Void (Void, absurd)
+import Text.PrettyPrint.ANSI.Leijen (Pretty(..), Doc)
+
+import qualified Text.PrettyPrint.ANSI.Leijen as Print
 
 import Fresh.Class (MonadFresh, fresh, Stream(..))
 import qualified Data.List.NonEmpty as NonEmpty
@@ -39,57 +41,6 @@ makeBound ''Expr
 deriving instance Show a => Show (Expr a)
 deriving instance Eq a => Eq (Expr a)
 
-ppr
-  :: forall s a b m
-   . MonadFresh s a m
-  => (a -> String)
-  -> (b -> String)
-  -> Expr b
-  -> m String
-ppr avar = go1
-  where
-    go1
-      :: forall c
-       . (c -> String)
-      -> Expr c
-      -> m String
-    go1 bvar (Var a) = pure $ bvar a
-    go1 _ (Int a) = pure $ show a
-    go1 bvar (Add a b) = (\a' b' -> a' <> " + " <> b') <$> go3 bvar a <*> go2 bvar b
-    go1 bvar (Call f xs) =
-      (\f' xs' -> f' <> " " <> intercalate " " (NonEmpty.toList xs')) <$>
-      go2 bvar f <*> traverse (go2 bvar) xs
-    go1 bvar (Lam n s) = do
-      ns <- replicateM n $ avar <$> fresh
-      (\s' -> "\\" <> intercalate " " ns <> " -> " <> s') <$>
-        go1 (unvar (ns !!) bvar) (fromScope s)
-
-    go3
-      :: forall c
-       . (c -> String)
-      -> Expr c
-      -> m String
-    go3 bvar e@Var{} = go1 bvar e
-    go3 bvar e@Int{} = go1 bvar e
-    go3 bvar e@Add{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
-    go3 bvar e@Call{} = go2 bvar e
-    go3 bvar e@Lam{} = go2 bvar e
-
-    go2
-      :: forall c
-       . (c -> String)
-      -> Expr c
-      -> m String
-    go2 bvar e@Var{} = go1 bvar e
-    go2 bvar e@Int{} = go1 bvar e
-    go2 bvar e@Add{} = go1 bvar e
-    go2 bvar e@Call{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
-    go2 bvar e@Lam{} = (\x -> "(" <> x <> ")") <$> go1 bvar e
-
-pprLifted :: MonadFresh s a m => (a -> String) -> Lifted a -> m String
-pprLifted var (Lifted a e) =
-  (\e' -> var a <> " = " <> e') <$>
-  ppr var absurd e
 
 lam :: Eq a => [a] -> Expr a -> Expr a
 lam as e =
@@ -189,14 +140,6 @@ liftLambdas = runWriterT . liftLambdas' id
 fun1 :: Expr String
 fun1 = lam ["x"] $ Call (Var "x") [lam ["y"] $ Call (Var "x") [Var "y"]]
 
-example1 :: MonadFresh s String m => m String
-example1 = do
-  (expr, defs) <- liftLambdas fun1
-  (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
-    ppr id id fun1 <*>
-    ppr id id expr <*>
-    traverse (pprLifted id) defs
-
 y :: Expr String
 y =
   lam ["f"] $
@@ -204,22 +147,73 @@ y =
     (lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]])
     [lam ["x"] $ Call (Var "f") [Call (Var "x") [Var "x"]]]
 
-example2 :: MonadFresh s String m => m String
-example2 = do
-  (expr, defs) <- liftLambdas y
-  (\a b c -> unlines $ "from\n" : a : "" : "to\n" : b : c) <$>
-    ppr id id y <*>
-    ppr id id expr <*>
-    traverse (pprLifted id) defs
-
 id' :: Expr String
 id' = lam ["x"] $ Var "x"
 
 succ' :: Expr String
 succ' = lam ["x"] $ Add (Int 1) (Var "x")
 
+const' :: Expr String
+const' = lam ["x"] $ lam ["y"] $ Var "x"
+
 tripleAdd' :: Expr String
 tripleAdd' = lam ["x", "y", "z"] $ Add (Add (Var "x") (Var "y")) (Var "z")
 
 compose' :: Expr String
 compose' = lam ["f", "g", "x"] $ Call (Var "f") [Call (Var "g") [Var "x"]]
+
+
+--- Pretty printing
+
+
+subZero :: Char
+subZero = '₀'
+
+subDigits :: [Char]
+subDigits = take 10 $ iterate succ subZero
+
+showSub :: Int -> String
+showSub = fmap ((subDigits !!) . read . pure) . show
+
+lambda :: Char
+lambda = 'λ'
+
+prettyExpr :: (a -> Doc) -> Expr a -> Doc
+prettyExpr = go1 0
+  where
+    go1 :: Int -> (a -> Doc) -> Expr a -> Doc
+    go1 !_ aDoc (Var a) = aDoc a
+    go1 !_ _ (Int a) = Print.text $ show a
+    go1 !depth aDoc (Add a b) = Print.hsep [go3 depth aDoc a, Print.char '+',  go2 depth aDoc b]
+    go1 !depth aDoc (Call f xs) =
+      Print.hsep $ go2 depth aDoc f : NonEmpty.toList (go2 depth aDoc <$> xs)
+    go1 !depth aDoc (Lam n s) =
+      Print.hsep
+      [ Print.char lambda <> Print.braces (Print.hsep $ (Print.int . (+depth)) <$> [0..n-1]) <> Print.dot
+      , go1 (depth+1) (unvar (Print.int . (+depth)) aDoc) (fromScope s)
+      ]
+
+    go2 :: Int -> (a -> Doc) -> Expr a -> Doc
+    go2 !depth aDoc e@Var{} = go1 depth aDoc e
+    go2 !depth aDoc e@Int{} = go1 depth aDoc e
+    go2 !depth aDoc e@Add{} = go1 depth aDoc e
+    go2 !depth aDoc e@Call{} = Print.parens $ go1 depth aDoc e
+    go2 !depth aDoc e@Lam{} = Print.parens $ go1 depth aDoc e
+
+    go3 :: Int -> (a -> Doc) -> Expr a -> Doc
+    go3 !depth aDoc e@Var{} = go1 depth aDoc e
+    go3 !depth aDoc e@Int{} = go1 depth aDoc e
+    go3 !depth aDoc e@Add{} = Print.parens $ go1 depth aDoc e
+    go3 !depth aDoc e@Call{} = go2 depth aDoc e
+    go3 !depth aDoc e@Lam{} = go2 depth aDoc e
+
+prettyLifted :: (a -> Doc) -> Lifted a -> Doc
+prettyLifted aDoc (Lifted a b) =
+  Print.hsep [aDoc a, Print.char '='] <>
+  Print.nest 2 (prettyExpr absurd b)
+
+instance Pretty a => Pretty (Expr a) where
+  pretty = prettyExpr pretty
+
+instance Pretty a => Pretty (Lifted a) where
+  pretty = prettyLifted pretty

@@ -1,4 +1,4 @@
-{ mkDerivation, base, bound, deriving-compat, grin, hedgehog
+{ mkDerivation, ansi-wl-pprint, base, bound, deriving-compat, grin, hedgehog
 , lens, mtl, stdenv, transformers, llc-7
 }:
 mkDerivation {
@@ -6,7 +6,7 @@ mkDerivation {
   version = "0.1.0.0";
   src = ./.;
   libraryHaskellDepends = [
-    base bound deriving-compat grin lens mtl
+    ansi-wl-pprint base bound deriving-compat grin lens mtl
     transformers
   ];
   testHaskellDepends = [ base bound hedgehog mtl ];
