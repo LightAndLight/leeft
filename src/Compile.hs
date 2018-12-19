@@ -4,11 +4,15 @@
 {-# language ScopedTypeVariables #-}
 module Compile where
 
-import Bound.Scope (fromScope)
+import Debug.Trace
+
+import Bound.Scope (fromScope, toScope)
 import Bound.Var (unvar)
+import Control.Applicative ((<|>))
 import Control.Monad (guard)
 import Control.Monad.Cont (ContT(..))
 import Control.Monad.State (MonadState, gets, put, modify, execState)
+import Control.Monad.Writer (WriterT, runWriterT, tell)
 import Data.Bifunctor (bimap, second)
 import Data.Foldable (toList, traverse_, foldl')
 import Data.IntMap (IntMap)
@@ -19,12 +23,13 @@ import Defun
 import Lambda (freshName)
 import qualified Lambda (Expr)
 import qualified Data.IntMap as IntMap
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Grin.Grin as Grin (packName)
-import qualified Grin.Syntax as Grin
-  (Exp(..), Name, Val(..), Lit(..), pattern SFetch)
+import qualified Grin.Syntax as Grin (Exp(..), Name, Val(..), Lit(..))
 import qualified Grin.SyntaxDefs as Grin (Tag(..), TagType(..))
-import qualified Pipeline.Pipeline as Grin (optimize)
-import qualified Pipeline.Definitions as Grin (PipelineStep(..), defaultOpts)
+import qualified Pipeline.Pipeline as Grin (optimizeWith)
+import qualified Pipeline.Definitions as Grin (Transformation(..), PipelineStep(..), Path(..), defaultOpts)
+import qualified Pipeline.Utils as Grin (defaultOptimizations, defaultOnChange, defaultCleanUp)
 import qualified Transformations.GenerateEval as Grin (generateEval)
 
 arities :: Eq a => [Def a] -> a -> Maybe Int
@@ -39,7 +44,7 @@ defsToGrin
   => (a -> Grin.Name)
   -> [Def a]
   -> m [(Grin.Name, [Grin.Name], Grin.Exp)]
-defsToGrin name ls = traverse (defToGrin name) ls
+defsToGrin name = traverse (defToGrin name)
 
 defToGrin
   :: (Eq a, MonadState [a] m)
@@ -61,7 +66,7 @@ defToGrin name (Def n arity s) =
         (pure . Grin.SReturn . Grin.Var)
     pure (names, s')
   where
-    arsA = \x -> arity <$ guard (x == n)
+    arsA x = arity <$ guard (x == n)
     arsB = unvar (const Nothing) arsA
 
 
@@ -125,16 +130,10 @@ exprToGrin _ arsA arsB nameA nameB (Add a b) = do
     nameA
     (Grin.SApp (Grin.packName "_prim_int_add") [Grin.Var a', Grin.Var b'])
   yieldExp nameA $ Grin.SStore $ cInt $ Grin.Var c
-exprToGrin level _ arsB nameA nameB (Var a) =
-  case arsB a of
-    Nothing ->
-      case level of
-        Inner -> pure $ nameB a
-        TopLevel -> yieldExp nameA $ Grin.SFetch $ nameB a
-    Just ar ->
-      yieldExp nameA $
-      Grin.SStore $
-      Grin.ConstTagNode (Grin.Tag (Grin.P ar) (nameB a)) []
+exprToGrin level _ _ nameA nameB (Var a) =
+  case level of
+    Inner -> pure $ nameB a
+    TopLevel -> evalAs nameA Grin.Var (Grin.Var $ nameB a)
 exprToGrin level arsA arsB nameA nameB (App f xs) = do
   f' <- exprToGrin Inner arsA arsB nameA nameB f
   xs' <- traverse (exprToGrin Inner arsA arsB nameA nameB) (toList xs)
@@ -152,12 +151,12 @@ exprToGrin level arsA arsB nameA nameB (App f xs) = do
 exprToGrin _ arsA _ nameA _ (Global a) =
   case arsA a of
     Nothing -> error "no arity for global function"
-    Just ar -> do
+    Just ar ->
       yieldExp nameA . Grin.SStore $
         Grin.ConstTagNode
           (Grin.Tag (Grin.P ar) $ nameA a)
           []
-exprToGrin _ arsA arsB nameA nameB (Call a xs) = do
+exprToGrin level arsA arsB nameA nameB (Call a xs) = do
   xs' <- traverse (exprToGrin Inner arsA arsB nameA nameB) (toList xs)
   case arsA a of
     Nothing -> yieldExp nameA $ Grin.SApp (nameA a) (Grin.Var <$> xs')
@@ -215,16 +214,16 @@ genAps ds = toList $ execState (go ds) IntMap.empty
         Int _ -> pure ()
 
 exprToProgram
-  :: (IsString a, Semigroup a, Eq a, MonadState [a] m)
+  :: (Show a, IsString a, Semigroup a, Eq a, MonadState [a] m)
   => (a -> Grin.Name)
   -> Lambda.Expr a
   -> m Grin.Exp
 exprToProgram name e = do
   (e1, defs1) <- defun e
   defs2 <- (genAps defs1 <>) <$> traverse (defToGrin name) defs1
-  let ars = (\a -> lookup (name a) $ (\(b, c, _) -> (b, length c)) <$> defs2)
+  let ars2 a = lookup (name a) $ (\(b, c, _) -> (b, length c)) <$> defs2
   e3 <- flip runContT (pure . Grin.SReturn . Grin.Var) $ do
-    e3 <- exprToGrin TopLevel ars ars name name e1
+    e3 <- exprToGrin TopLevel ars2 ars2 name name e1
     res <- evalAs name (cInt . Grin.Var) (Grin.Var e3)
     yieldExp name $ Grin.SApp (Grin.packName "_prim_int_print") [Grin.Var res]
   let
@@ -236,8 +235,11 @@ exprToProgram name e = do
 
 optimizeProgram :: Grin.Exp -> IO Grin.Exp
 optimizeProgram e =
-  Grin.optimize
+  Grin.optimizeWith
     Grin.defaultOpts
     e
     []
-    [Grin.PrintAST, Grin.SaveLLVM True "out"]
+    Grin.defaultOptimizations
+    (Grin.T Grin.InlineEval : Grin.defaultOnChange)
+    Grin.defaultCleanUp
+    [Grin.PrintAST, Grin.SaveLLVM True "out", Grin.SaveGrin $ Grin.Rel "grin"]
