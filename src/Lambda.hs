@@ -13,7 +13,6 @@ import Bound.Scope (fromScope, toScope, abstract)
 import Bound.TH (makeBound)
 import Bound.Var (Var(..), unvar)
 import Control.Monad.State (runState, gets, put)
-import Control.Monad.Trans (lift)
 import Control.Monad.Writer (MonadWriter, tell, runWriterT)
 import Data.Deriving (deriveEq1, deriveShow1)
 import Data.Foldable (traverse_)
@@ -65,13 +64,6 @@ apply1 a =
   toScope .
   (>>= unvar (\n -> if n == 0 then F <$> a else pure $ B (n-1)) (pure . F)) .
   fromScope
-
-closeExpr
-  :: forall b
-   . Eq b
-  => Expr b
-  -> (Scope Int Expr Void, Int, [b])
-closeExpr = closeScope . lift
 
 -- | Close over a scope, returning the new scope, the number of variables abstracted,
 -- and a list of the abstracted variables
@@ -203,7 +195,8 @@ prettyExpr = go1 0
     go1 :: Int -> (a -> Doc) -> Expr a -> Doc
     go1 !_ aDoc (Var a) = aDoc a
     go1 !_ _ (Int a) = Print.text $ show a
-    go1 !depth aDoc (Add a b) = Print.hsep [go3 depth aDoc a, Print.char '+',  go2 depth aDoc b]
+    go1 !depth aDoc (Add a b) =
+      Print.hsep [go3 depth aDoc a, Print.char '+',  go2 depth aDoc b]
     go1 !depth aDoc (Call f xs) =
       Print.hsep $ go2 depth aDoc f : NonEmpty.toList (go2 depth aDoc <$> xs)
     go1 !depth aDoc (Lam n s) =
