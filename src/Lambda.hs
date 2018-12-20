@@ -2,6 +2,7 @@
 {-# language FlexibleContexts #-}
 {-# language OverloadedLists #-}
 {-# language OverloadedStrings #-}
+{-# language RankNTypes #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving, DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
 {-# language TemplateHaskell #-}
@@ -15,6 +16,7 @@ import Control.Monad.State (runState, gets, put)
 import Control.Monad.Trans (lift)
 import Control.Monad.Writer (MonadWriter, tell, runWriterT)
 import Data.Deriving (deriveEq1, deriveShow1)
+import Data.Foldable (traverse_)
 import Data.Int (Int64)
 import Data.List (elemIndex)
 import Data.List.NonEmpty (NonEmpty(..))
@@ -40,6 +42,9 @@ deriveEq1 ''Expr
 makeBound ''Expr
 deriving instance Show a => Show (Expr a)
 deriving instance Eq a => Eq (Expr a)
+
+data Def a = Def a (Expr a)
+data Program f a = Program [f a] (Expr a)
 
 lam :: Eq a => [a] -> Expr a -> Expr a
 lam as e =
@@ -93,7 +98,7 @@ closeScope s = (res, l, Ordered.toList st)
         (fmap toScope $ traverse updateVar $ fromScope s)
         Ordered.empty
 
-data Lifted a = Lifted a (Expr Void)
+data Lifted a = Lifted a (Expr a)
 
 nameSupply :: forall s. (IsString s, Semigroup s) => Stream s
 nameSupply = go 0
@@ -101,9 +106,26 @@ nameSupply = go 0
     go :: Int -> Stream s
     go !n = Cons ("v" <> fromString (show n)) (go $ n+1)
 
-liftLambdas :: (MonadFresh s a m, Eq a) => Expr a -> m (Expr a, [Lifted a])
-liftLambdas = runWriterT . liftLambdas' id
+liftLambdas :: (MonadFresh s a m, Eq a) => Program Def a -> m (Program Lifted a)
+liftLambdas (Program defs ex)= do
+  (ex', defs') <- runWriterT $ do
+    traverse_ liftLambdasDef' defs
+    liftLambdas' id ex
+  pure $ Program defs' ex'
   where
+    liftLambdasDef'
+      :: forall s a m
+      . (MonadFresh s a m, MonadWriter [Lifted a] m)
+      => Eq a => Def a -> m ()
+    liftLambdasDef' (Def a b) =
+      case b of
+        Lam n s -> do
+          s' <- liftLambdas'Scope id s
+          tell [Lifted a $ Lam n s']
+        _ -> do
+          b' <- liftLambdas' id b
+          tell [Lifted a b']
+
     liftLambdas'
       :: forall s a m
       . (MonadFresh s a m, MonadWriter [Lifted a] m)
@@ -122,19 +144,19 @@ liftLambdas = runWriterT . liftLambdas' id
           n <- fresh
           case closeScope s' of
             (s'', lxs, xs) -> do
-              tell [Lifted n $ Lam (as + lxs) s'']
+              tell [Lifted n (absurd <$> Lam (as + lxs) s'')]
               pure $ case Var <$> xs of
                 [] -> Var $ ctx n
                 v:vs -> Call (Var $ ctx n) $ v :| vs
-      where
-        liftLambdas'Scope
-          :: forall b
-           . Eq b
-          => (a -> b)
-          -> Scope Int Expr b
-          -> m (Scope Int Expr b)
-        liftLambdas'Scope ctx' =
-          fmap toScope . liftLambdas' (F . ctx') . fromScope
+
+    liftLambdas'Scope
+      :: forall s a b m
+      . (MonadFresh s a m, MonadWriter [Lifted a] m, Eq b)
+      => (a -> b)
+      -> Scope Int Expr b
+      -> m (Scope Int Expr b)
+    liftLambdas'Scope ctx' =
+      fmap toScope . liftLambdas' (F . ctx') . fromScope
 
 fun1 :: Expr String
 fun1 = lam ["x"] $ Call (Var "x") [lam ["y"] $ Call (Var "x") [Var "y"]]
@@ -188,7 +210,9 @@ prettyExpr = go1 0
       Print.hsep $ go2 depth aDoc f : NonEmpty.toList (go2 depth aDoc <$> xs)
     go1 !depth aDoc (Lam n s) =
       Print.hsep
-      [ Print.char lambda <> Print.braces (Print.hsep $ (Print.int . (+depth)) <$> [0..n-1]) <> Print.dot
+      [ Print.char lambda <>
+        Print.braces (Print.hsep $ Print.int . (+depth) <$> [0..n-1]) <>
+        Print.dot
       , go1 (depth+1) (unvar (Print.int . (+depth)) aDoc) (fromScope s)
       ]
 
@@ -206,13 +230,28 @@ prettyExpr = go1 0
     go3 !depth aDoc e@Call{} = go2 depth aDoc e
     go3 !depth aDoc e@Lam{} = go2 depth aDoc e
 
+prettyProgram
+  :: (forall x. (x -> Doc) -> f x -> Doc)
+  -> (a -> Doc)
+  -> Program f a -> Doc
+prettyProgram fDoc aDoc (Program a b) =
+  Print.vsep $ fmap (fDoc aDoc) a <> [prettyExpr aDoc b]
+
+prettyDef :: (a -> Doc) -> Def a -> Doc
+prettyDef aDoc (Def a b) =
+  Print.hsep [aDoc a, Print.char '='] <>
+  Print.nest 2 (prettyExpr aDoc b)
+
 prettyLifted :: (a -> Doc) -> Lifted a -> Doc
 prettyLifted aDoc (Lifted a b) =
   Print.hsep [aDoc a, Print.char '='] <>
-  Print.nest 2 (prettyExpr absurd b)
+  Print.nest 2 (prettyExpr aDoc b)
 
 instance Pretty a => Pretty (Expr a) where
   pretty = prettyExpr pretty
 
 instance Pretty a => Pretty (Lifted a) where
   pretty = prettyLifted pretty
+
+instance Pretty a => Pretty (Def a) where
+  pretty = prettyDef pretty

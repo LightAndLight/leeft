@@ -1,6 +1,7 @@
 {-# language DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
 {-# language DeriveGeneric #-}
 {-# language FlexibleContexts #-}
+{-# language ScopedTypeVariables #-}
 {-# language TemplateHaskell #-}
 {-# language KindSignatures, TypeFamilies #-}
 module Defun where
@@ -13,8 +14,11 @@ import Control.Monad.Trans (lift)
 import Data.Int (Int64)
 import Data.Functor.Foldable.TH (makeBaseFunctor)
 import Data.List.NonEmpty (NonEmpty(..))
-import Data.Void (Void, absurd)
 import GHC.Generics (Generic)
+import Text.PrettyPrint.ANSI.Leijen (Pretty(..), Doc)
+
+import qualified Data.List.NonEmpty as NonEmpty
+import qualified Text.PrettyPrint.ANSI.Leijen as Print
 
 import Fresh.Class (MonadFresh)
 import qualified Lambda as Lambda
@@ -32,20 +36,21 @@ makeBaseFunctor ''Defun
 
 instance Plated (Defun a b) where; plate = gplate
 
-data Def a = Def a !Int (Scope Int (Defun a) Void)
+data Program a = Program [Def a] (Defun a a)
+data Def a = Def a !Int (Scope Int (Defun a) a)
 
 defun
   :: (Eq a, MonadFresh s a m)
-  => Lambda.Expr a
-  -> m (Defun a a, [Def a])
+  => Lambda.Program Lambda.Def a
+  -> m (Program a)
 defun e = do
-  (e', ds) <- Lambda.liftLambdas e
-  pure (defunExprTop id e', defunLifted <$> ds)
+  Lambda.Program ds e' <- Lambda.liftLambdas e
+  pure $ Program (defunLifted <$> ds) (defunExprTop id e')
 
 defunLifted
   :: Lambda.Lifted a
   -> Def a
-defunLifted (Lambda.Lifted a def) = uncurry (Def a) $ defunExpr absurd def
+defunLifted (Lambda.Lifted a def) = uncurry (Def a) $ defunExpr id def
 
 defunExprTop
   :: (b -> a)
@@ -84,3 +89,66 @@ defunExprInner ctx e =
     Lambda.Lam _ _ -> error "nested lambdas should have been eliminated"
     Lambda.Int n -> Int n
     Lambda.Add a b -> Add (defunExprInner ctx a) (defunExprInner ctx b)
+
+--- pretty printing
+
+prettyDefun :: forall a b. (a -> Doc) -> (b -> Doc) -> Defun a b -> Doc
+prettyDefun aDoc bDoc = go1
+  where
+    go1 :: Defun a b -> Doc
+    go1 (Var a) = bDoc a
+    go1 (Global a) = aDoc a
+    go1 (Int a) = Print.text $ show a
+    go1 (Add a b) =
+      Print.hsep [go3 a, Print.char '+', go2 b]
+    go1 (Call f xs) =
+      Print.hsep $ aDoc f : NonEmpty.toList (go2 <$> xs)
+    go1 (App f xs) =
+      Print.hsep $ go2 f : NonEmpty.toList (go2 <$> xs)
+
+    go2 :: Defun a b -> Doc
+    go2 e@Var{} = go1 e
+    go2 e@Global{} = go1 e
+    go2 e@Int{} = go1 e
+    go2 e@Add{} = go1 e
+    go2 e@Call{} = Print.parens $ go1 e
+    go2 e@App{} = Print.parens $ go1 e
+
+    go3 :: Defun a b -> Doc
+    go3 e@Var{} = go1 e
+    go3 e@Global{} = go1 e
+    go3 e@Int{} = go1 e
+    go3 e@Add{} = Print.parens $ go1 e
+    go3 e@Call{} = go2 e
+    go3 e@App{} = go2 e
+
+prettyProgram
+  :: (a -> Doc)
+  -> Program a
+  -> Doc
+prettyProgram aDoc (Program a b) =
+  Print.vsep $
+  fmap (prettyDef aDoc) a <>
+  [Print.hsep [Print.text "main", Print.char '=', prettyDefun aDoc aDoc b]]
+
+prettyDef :: (a -> Doc) -> Def a -> Doc
+prettyDef aDoc (Def a n b) =
+  Print.hsep
+  [ aDoc a
+  , Print.char '='
+  , Print.char lambda <>
+    Print.braces (Print.hsep $ Print.int <$> [0..n-1]) <>
+    Print.dot
+  , prettyDefun aDoc (unvar Print.int aDoc) (fromScope b)
+  ]
+  where
+    lambda = 'λ'
+
+instance (Pretty a, Pretty b) => Pretty (Defun a b) where
+  pretty = prettyDefun pretty pretty
+
+instance Pretty a => Pretty (Def a) where
+  pretty = prettyDef pretty
+
+instance Pretty a => Pretty (Program a) where
+  pretty = prettyProgram pretty

@@ -14,7 +14,6 @@ import Data.Foldable (toList, foldl')
 import Data.Functor.Foldable (cata)
 import Data.IntMap (IntMap)
 import Data.String (IsString(..))
-import Data.Void (absurd)
 
 import qualified Data.IntMap as IntMap
 import qualified Grin.Grin as Grin (packName)
@@ -28,7 +27,7 @@ import qualified Transformations.GenerateEval as Grin (generateEval)
 import Defun
 import Fresh.Class (MonadFresh, fresh)
 
-import qualified Lambda (Expr)
+import qualified Lambda (Def, Program)
 
 newtype ExpBuilderT m a = ExpBuilderT { unExpBuilderT :: ContT Grin.Exp m a }
   deriving (Functor, Applicative, Monad)
@@ -80,7 +79,7 @@ defToGrin name (Def n arity s) =
            F
            arsB
            (unvar (names !!) name)
-           (fromScope $ absurd <$> s)
+           (fromScope s)
            TopLevel)
         (pure . Grin.SReturn . Grin.Var)
     pure (names, s')
@@ -226,10 +225,10 @@ genAps ds = toList $ execState (go ds) IntMap.empty
 exprToProgram
   :: (Show a, IsString a, Semigroup a, Eq a, MonadFresh s a m)
   => (a -> Grin.Name)
-  -> Lambda.Expr a
+  -> Lambda.Program Lambda.Def a
   -> m Grin.Exp
 exprToProgram name e = do
-  (e1, defs1) <- defun e
+  Program defs1 e1 <- defun e
 
   defs2 <- (genAps defs1 <>) <$> traverse (defToGrin name) defs1
 
