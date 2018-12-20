@@ -44,7 +44,7 @@ deriving instance Show a => Show (Expr a)
 deriving instance Eq a => Eq (Expr a)
 
 data Def a = Def a (Expr a)
-data Program f a = Program [f a] (Expr a)
+data Program a = Program [Def a] (Expr a)
 
 lam :: Eq a => [a] -> Expr a -> Expr a
 lam as e =
@@ -98,15 +98,13 @@ closeScope s = (res, l, Ordered.toList st)
         (fmap toScope $ traverse updateVar $ fromScope s)
         Ordered.empty
 
-data Lifted a = Lifted a (Expr a)
-
 nameSupply :: forall s. (IsString s, Semigroup s) => Stream s
 nameSupply = go 0
   where
     go :: Int -> Stream s
     go !n = Cons ("v" <> fromString (show n)) (go $ n+1)
 
-liftLambdas :: (MonadFresh s a m, Eq a) => Program Def a -> m (Program Lifted a)
+liftLambdas :: (MonadFresh s a m, Eq a) => Program a -> m (Program a)
 liftLambdas (Program defs ex)= do
   (ex', defs') <- runWriterT $ do
     traverse_ liftLambdasDef' defs
@@ -115,20 +113,20 @@ liftLambdas (Program defs ex)= do
   where
     liftLambdasDef'
       :: forall s a m
-      . (MonadFresh s a m, MonadWriter [Lifted a] m)
+      . (MonadFresh s a m, MonadWriter [Def a] m)
       => Eq a => Def a -> m ()
     liftLambdasDef' (Def a b) =
       case b of
         Lam n s -> do
           s' <- liftLambdas'Scope id s
-          tell [Lifted a $ Lam n s']
+          tell [Def a $ Lam n s']
         _ -> do
           b' <- liftLambdas' id b
-          tell [Lifted a b']
+          tell [Def a b']
 
     liftLambdas'
       :: forall s a m
-      . (MonadFresh s a m, MonadWriter [Lifted a] m)
+      . (MonadFresh s a m, MonadWriter [Def a] m)
       => forall b. Eq b => (a -> b) -> Expr b -> m (Expr b)
     liftLambdas' ctx e =
       case e of
@@ -144,14 +142,14 @@ liftLambdas (Program defs ex)= do
           n <- fresh
           case closeScope s' of
             (s'', lxs, xs) -> do
-              tell [Lifted n (absurd <$> Lam (as + lxs) s'')]
+              tell [Def n (absurd <$> Lam (as + lxs) s'')]
               pure $ case Var <$> xs of
                 [] -> Var $ ctx n
                 v:vs -> Call (Var $ ctx n) $ v :| vs
 
     liftLambdas'Scope
       :: forall s a b m
-      . (MonadFresh s a m, MonadWriter [Lifted a] m, Eq b)
+      . (MonadFresh s a m, MonadWriter [Def a] m, Eq b)
       => (a -> b)
       -> Scope Int Expr b
       -> m (Scope Int Expr b)
@@ -231,27 +229,21 @@ prettyExpr = go1 0
     go3 !depth aDoc e@Lam{} = go2 depth aDoc e
 
 prettyProgram
-  :: (forall x. (x -> Doc) -> f x -> Doc)
-  -> (a -> Doc)
-  -> Program f a -> Doc
-prettyProgram fDoc aDoc (Program a b) =
-  Print.vsep $ fmap (fDoc aDoc) a <> [prettyExpr aDoc b]
+  :: (a -> Doc)
+  -> Program a -> Doc
+prettyProgram aDoc (Program a b) =
+  Print.vsep $ fmap (prettyDef aDoc) a <> [prettyExpr aDoc b]
 
 prettyDef :: (a -> Doc) -> Def a -> Doc
 prettyDef aDoc (Def a b) =
   Print.hsep [aDoc a, Print.char '='] <>
   Print.nest 2 (prettyExpr aDoc b)
 
-prettyLifted :: (a -> Doc) -> Lifted a -> Doc
-prettyLifted aDoc (Lifted a b) =
-  Print.hsep [aDoc a, Print.char '='] <>
-  Print.nest 2 (prettyExpr aDoc b)
-
 instance Pretty a => Pretty (Expr a) where
   pretty = prettyExpr pretty
 
-instance Pretty a => Pretty (Lifted a) where
-  pretty = prettyLifted pretty
-
 instance Pretty a => Pretty (Def a) where
   pretty = prettyDef pretty
+
+instance Pretty a => Pretty (Program a) where
+  pretty = prettyProgram pretty

@@ -41,16 +41,16 @@ data Def a = Def a !Int (Scope Int (Defun a) a)
 
 defun
   :: (Eq a, MonadFresh s a m)
-  => Lambda.Program Lambda.Def a
+  => Lambda.Program a
   -> m (Program a)
 defun e = do
   Lambda.Program ds e' <- Lambda.liftLambdas e
-  pure $ Program (defunLifted <$> ds) (defunExprTop id e')
+  pure $ Program (defunDef <$> ds) (defunExprTop id e')
 
-defunLifted
-  :: Lambda.Lifted a
+defunDef
+  :: Lambda.Def a
   -> Def a
-defunLifted (Lambda.Lifted a def) = uncurry (Def a) $ defunExpr id def
+defunDef (Lambda.Def a def) = uncurry (Def a) $ defunExpr id def
 
 defunExprTop
   :: (b -> a)

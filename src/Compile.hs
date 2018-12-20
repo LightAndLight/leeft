@@ -27,7 +27,7 @@ import qualified Transformations.GenerateEval as Grin (generateEval)
 import Defun
 import Fresh.Class (MonadFresh, fresh)
 
-import qualified Lambda (Def, Program)
+import qualified Lambda (Program)
 
 newtype ExpBuilderT m a = ExpBuilderT { unExpBuilderT :: ContT Grin.Exp m a }
   deriving (Functor, Applicative, Monad)
@@ -225,7 +225,7 @@ genAps ds = toList $ execState (go ds) IntMap.empty
 exprToProgram
   :: (Show a, IsString a, Semigroup a, Eq a, MonadFresh s a m)
   => (a -> Grin.Name)
-  -> Lambda.Program Lambda.Def a
+  -> Lambda.Program a
   -> m Grin.Exp
 exprToProgram name e = do
   Program defs1 e1 <- defun e
